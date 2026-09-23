@@ -114,7 +114,7 @@ from datetime import date
 HERE = os.path.dirname(os.path.abspath(__file__))
 # triage_engine 打包版（2026-09-23 v1.07）：规则单源随包分发（../rules/），不依赖 outputs 相对层级；
 # 与 outputs/github-triage-20260615-23 运行层同源快照，机制与表格内容一致。
-RULES = os.path.normpath(os.path.join(HERE, "..", "..", "rules"))
+RULES = os.path.normpath(os.path.join(HERE, "..", "rules"))  # 包根/rules（一级上溯；两级会指到包外，2026-09-23 修正）
 sys.path.insert(0, HERE)
 sys.path.insert(0, RULES)
 from cls_data import TYPES  # noqa: E402

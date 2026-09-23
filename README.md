@@ -31,7 +31,7 @@ python -m triage_engine.cli version   # 验证：triage_engine v1.08 method=…f
 from triage_engine import run
 from triage_engine.io_rows import read_batch_dir   # 三源 CSV 读取器（可选）
 
-rows, _files = read_batch_dir("test/data/2660624-260630")     # 或自行构造 rows（schema 见下）
+rows, _files = read_batch_dir("你的三源CSV目录")             # 或自行构造 rows（schema 见下）
 result = run(rows, "outputs/my_out")                # 纯规则层
 # result = run(rows, "outputs/my_out", llm_decisions="path/to/llm_semantic_decisions.json")  # 合并 LLM 判定
 
@@ -46,7 +46,7 @@ for x in result["items"]:     # 每条记录的完整判定+评分+审计
 ### 命令行
 
 ```bash
-python -m triage_engine.cli run --batch-dir test/data/2660624-260630 --out OUT      # 批次目录（三源扁平布局）
+python -m triage_engine.cli run --batch-dir 你的三源CSV目录 --out OUT                # 批次目录（三源扁平布局）
 python -m triage_engine.cli run --news a.csv --wechat b.csv --literature c.csv --out OUT
 python -m triage_engine.cli run --rows rows.json --out OUT --llm-decisions dec.json
 python -m triage_engine.cli llm  --batch-dir ... --out OUT --batch 16 --sleep 6     # LLM 语义判定（需 .env）
@@ -117,7 +117,7 @@ v1.08 W3（『多个新能源项目并网』常规发电汇总稿 → S-A04 硬�
 v1.08 B1（十五五媒体投资解读稿 → T19 改判 T23 入参考区）、T01 论文主榜、
 域外结构化原因、宁德时代主体范围免评。
 
-端到端实数据验证：`python -m triage_engine.cli run --batch-dir test/data/2660624-260630 --out outputs/engine-e2e-20260626`
+端到端实数据验证（开发仓内部记录，该数据目录未随包分发）：`cli run --batch-dir …/2660624-260630`
 （2818 行 → 2281 条，事件级合并 16，参考区 327，高 32；与 outputs 运行层同源结果）。
 
 ## 并发/嵌入注意
