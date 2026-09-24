@@ -1,4 +1,4 @@
-# AI_INTERFACE —— triage_engine 机器调用契约（v1.08）
+# AI_INTERFACE —— triage_engine 机器调用契约（v1.09）
 
 本文档面向**AI 程序/Agent/服务端调用方**：给出能力边界、端到端流程、输入/输出 JSON Schema、
 字段字典与全部评价机制表（未删减）。人类可读入门见 [README.md](README.md)。
@@ -39,6 +39,7 @@ S10 档位政策（地板/硬上限/上限/论文统一档位）——只改档�
   ▼
 参考区分区（v1.07）：eligible 且 T02/T23 → section=参考区，attention/档位=参考，层清空，
                      底层档位存 bandUnderlying（评分机制与审计链原样保留）
+                     → 【v1.09 展示链路】按最终类型映射 展示大类（论文/新闻）/展示小类/归入大类（A/B/C/D）三字段（纯展示，不进评分）
   │  ⑤ 事件级去重（union-find）：C-R01 DOI / C-R03 文号名·题名相似
   ▼
 排序（分区 → 日期 → 层 → -分值 → 关注 → 标题）→ 四件套写盘（out_dir）→ validate 结构断言
@@ -75,7 +76,7 @@ S10 档位政策（地板/硬上限/上限/论文统一档位）——只改档�
 
 ```json
 {
-  "method": "…+paper-band-v106b+ref-zone-v107+future-roundup-retype-v108",
+  "method": "…+paper-band-v106b+ref-zone-v107+future-roundup-retype-v108+display-chain-v109",
   "stats": { "raw", "records", "duplicates", "eventMerged", "mainDomain", "semanticOnly",
              "outOfScope", "typePending", "high", "medium", "low", "refZone", "unscored",
              "p0", "p1", "p2", "s10Floored", "s10Capped", "sourceHinted", "llmJudged", ... },
@@ -103,6 +104,9 @@ S10 档位政策（地板/硬上限/上限/论文统一档位）——只改档�
 | `priorityTier` | S9 排序层：`P0`/`P1`/`P2`（参考区为空串） |
 | `section` | **v1.07 分区**：`主榜` / `参考区`（T02/T23 eligible） |
 | `bandUnderlying` | **v1.07**：参考区条目的底层档位（高/中/低，S10 执行结果留档） |
+| `displayCategory` | **v1.09**：展示大类——论文（T01）/新闻（T02–T24）/待定（T25）；域外记录为 `—` | 
+| `displaySubcategory` | **v1.09**：展示小类——论文=四分型；新闻=知识资产/工程与产业化/企业经营合作与资本/资源市场与产业链/政策法规与标准/人才与组织动态/观点与交流；域外=`域外` |
+| `displayClass` | **v1.09**：归入大类 A科研知识/B产业化主链(链2-5)/C企业支撑/D外部环境（依据《新闻类型展示分类.xlsx》与 02 机制表《大类与产业链导航》）；纯展示不影响 S1–S10 |
 | `llmJudged` | 是否被 LLM 语义判定覆盖 |
 | `value` / `valueDisplay` | S8 分值（T02 报告为区间串如 `35–54`，value=null） |
 | `attention` | 关注等级：`高`/`中`/`低`/`参考`/`域外`/`待定`/`忽略` |
@@ -190,13 +194,15 @@ S10（顺序：硬上限 → 地板 → 常规上限 → 论文统一档位 → 
 | 上限 | S10-B 软信息 | 投融资/并购/市场/会议/宣传/观点/招聘无技术瓶颈载荷 | 低 |
 | 上限 | S10-C 常规动态 | 无技术细节建厂/招标/立项/资源法规常规；高TRL(≥9)常规运行无跃迁 | 低 |
 | 论文 | S-P01v2/S-P09/S-P10 | paper_class=T01 或 T22/T23×科研转载：正刊→高；题名突破词×量化参数→最低中；**其余统一中** | 中（默认） |
-| 类型改判 | **B1 媒体投资解读（v1.08）** | T19 × 规划话题 × 解读框架（出炉/定调/释放信号/投资方向/总投资将超）× 无政策本体锚点 → 改判 T23（typeRule=C-T08/T19-媒体解读改判（B1），审计留痕） | 入参考区 |
+| 类型改判 | **B1 媒体投资解读（v1.08）** | T19 × 规划话题 × 解读框架（出炉/定调/释放信号/投资方向/总投资将超/探析 v1.09 补词）× 无政策本体锚点 → 改判 T23（typeRule=C-T08/T19-媒体解读改判（B1），审计留痕） | 入参考区 |
 | 展示 | **参考区（v1.07）** | eligible 且 T02/T23 → 分区=参考区、档位/关注=参考、层清空；`bandUnderlying` 留底层档位；评分与审计链不动 | 参考区 |
+| 展示 | **展示链路（v1.09）** | 按最终类型映射 `DISPLAY_CHAIN_MAP`：T01→论文·四分型·A；T02–T06→新闻·知识资产·A（T05 计分走 B链3）；T07–T10→工程与产业化·B(链2-5)；T11–T14→企业经营合作资本·C；T15–T18→资源市场产业链·C/D/B链6；T19/T20→政策法规标准·D；T21→人才组织·C；T22–T24→观点与交流·A；T25→待定；域外→`—/域外/—`。stats 增 `displayChain` 计数。**不参与任何评分/档位/优先级**（用户 2026-09-24 口径） | 主榜/参考区不变 |
 
 ### 5.5 LLM 语义判定层（可选第三轨）
 
 - 协议：Anthropic Messages（`POST {LLM_BASE_URL}/v1/messages`），模型默认 glm-5.2，max_tokens 建议 4000，temperature 0。
 - Prompt：两份基准 docx 语义（领域树菜单＋类型菜单＋docx v2 依次分类路由摘要 ROUTING_DIGEST 注入）。
+- **预置叶冻结（v1.09，决策版本 2026-09-24-v3）**：除非与零碳产业/AI与智能科技/通用技术完全无关（判域外），新闻与文献的 `domain_path` 必须逐字取自预置菜单（含"运行扩展域"），无完全匹配时选语义最近的预置叶并在 reason 说明；禁止自拟"扩展:"新路径与新增节点（暂时冻结，用户 2026-09-24 口径）。`type_id` 仍须为 T01–T25。
 - 范围：默认全量（`--all`）；采纳策略：confidence=high 或规则层未决（域外/T25/AI00 停根）。
 - 断点续跑：`llm_semantic_audit.jsonl`（每批一条，i 索引去重）；429 退避 30/60/120/240s。
 - 输出合并：见 §3.2；低置信跳过计 `skipped_low_conf`。

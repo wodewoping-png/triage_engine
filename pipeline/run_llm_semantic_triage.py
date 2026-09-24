@@ -60,14 +60,14 @@ SYSTEM_PROMPT = """你是能源/零碳/AI 行业情报库的语义分类裁决�
 3 标题语义可单独支撑：正文为空或只有 digest 时按标题判域；文献（src=literature 或标题为论文题名）类型一律 T01；删链微信文章用 digest 判定，不得落 T25。
 4 载体形态优先：直播预约/预告/报名→T24；『N部门/部委发文+行动部署』→T19（吨位金额只是政策量化目标，不判 T15/T16）；标题阶段跃迁（开工/扩建/建成/并网/投运/发布/破纪录）→T08/T09/T10/T07，不落 T23。
 5 主事件锚定：类型以标题+导语主事件为准；尾部栏目/往期回顾/推广/日报后段其他事件只作 alternatives。
-6 领域取最深层适用完整路径；方法工具背景不得覆盖主对象。基准无路径但主对象稳定明确时，domain_path 填“扩展:对象名”。
-7 输出契约（严格 JSON 数组，每元素）：{"i":记录编号,"domain_path":"完整路径或‘域外’或‘扩展:名称’","domain_no":"D/E/GT 编号或空","type_id":"T01–T25","terms":["标题/正文中的领域关键词≤4个"],"alternatives":["第二独立事件的type_id"],"reason":"一句中文：主事件+判定依据","confidence":"high|medium|low"}
-8 type_id 必须逐字是 T01–T25 之一；不确定且无载体身份才用 T25；domain_no 不确定就留空，由路径兜底。
+6 领域取最深层适用完整路径；方法工具背景不得覆盖主对象。【2026-09-24 预置叶冻结】domain_path 必须逐字取自【技术领域菜单】或【语义树叶路径】的预置节点（含“运行扩展域”）；基准无完全匹配叶时，选语义最近的一个预置叶并在 reason 说明近似理由，禁止自拟“扩展:”新路径、禁止新增节点（暂时冻结）。只有与零碳产业/AI与智能科技/通用技术完全无关才可判“域外”。
+7 输出契约（严格 JSON 数组，每元素）：{"i":记录编号,"domain_path":"预置完整路径或‘域外’","domain_no":"D/E/GT 编号或空","type_id":"T01–T25","terms":["标题/正文中的领域关键词≤4个"],"alternatives":["第二独立事件的type_id"],"reason":"一句中文：主事件+判定依据","confidence":"high|medium|low"}
+8 type_id 必须逐字是 T01–T25 之一，禁止新增类型；不确定且无载体身份才用 T25；domain_no 不确定就留空，由路径兜底。
 
 【依次分类路由（v2 2026-09-21：必须按此执行——先定主对象，再 Q1零碳→Q2AI→Q3通用技术 逐层路由，下钻最深叶，禁止停留在分支根）】
 __ROUTING__
 
-【技术领域菜单】（domain_no 优先用编号；路径须与菜单逐字一致或在“扩展:”机制下自拟）
+【技术领域菜单】（domain_no 优先用编号；路径须与菜单逐字一致——预置叶冻结，禁止自拟新路径）
 __DOMAIN_MENU__
 
 【语义树叶路径】（domain_no 留空、domain_path 填下列完整路径之一时，评分按语义域处理）
@@ -305,7 +305,7 @@ def main():
             "isProblemCase": s["problem"],
         }
     with open(DECISIONS_PATH, "w", encoding="utf-8") as f:
-        json.dump({"version": "2026-09-21-v2（docx v2 依次分类路由注入 prompt）", "model": env.get("LLM_MODEL"),
+        json.dump({"version": "2026-09-24-v3（预置叶冻结：禁自拟扩展路径，最近预置叶兜底）", "model": env.get("LLM_MODEL"),
                    "policy": "confidence=high 或规则层未决（域外/T25/AI00 停根）时采纳；--force-all 可全量采纳",
                    "judged": len(done), "accepted": len(decisions), "skipped_low_conf": skipped,
                    "decisions": decisions}, f, ensure_ascii=False, indent=1)

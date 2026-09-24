@@ -20,10 +20,10 @@ PKG_ROOT = os.path.dirname(os.path.abspath(__file__))
 PIPELINE_DIR = os.path.join(PKG_ROOT, "pipeline")
 RULES_DIR = os.path.join(PKG_ROOT, "rules")
 
-ENGINE_VERSION = "1.08"
+ENGINE_VERSION = "1.09"
 METHOD_TAG = ("semantic-llm-calibrated-v5+three-band-scoring-v1.04+priority-tiers"
               "+s10-band-policy-v104+llm-merge+event-dedup-v105+paper-band-v106b+ref-zone-v107"
-              "+future-roundup-retype-v108")
+              "+future-roundup-retype-v108+display-chain-v109")
 
 OUTPUT_FILES = ("semantic_results.json", "semantic_results.csv",
                 "域外内容分析_20260615-23.csv", "三库严格语义分类看板_20260615-23.html")

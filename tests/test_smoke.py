@@ -51,7 +51,8 @@ PAPER_TITLE = "Sulfide solid electrolytes for all-solid-state batteries: interfa
 PAPER_BODY = (
     "Abstract: All-solid-state batteries promise higher energy density. We study sulfide solid "
     "electrolytes and their interface stability against lithium metal anodes. DOI 10.1000/demo1234. "
-    "Experiments show improved critical current density; the model explains degradation mechanisms."
+    "Experiments show improved critical current density; the model explains degradation mechanisms. "
+    "（域内锚点：固态电池·硫化物电解质·锂金属负极研究，锂电池方向）"
 )
 
 OUT_TITLE = "某明星官宣新剧定档，粉丝社群狂欢与周边预售开启"
@@ -119,7 +120,7 @@ def _find(result, title_prefix):
 
 
 def test_engine_smoke():
-    assert ENGINE_VERSION == "1.08"
+    assert ENGINE_VERSION == "1.09"
     with tempfile.TemporaryDirectory() as out_dir:
         result = run(_rows(), out_dir)
 
@@ -127,7 +128,7 @@ def test_engine_smoke():
         for fn in ("semantic_results.json", "semantic_results.csv",
                    "域外内容分析_20260615-23.csv", "三库严格语义分类看板_20260615-23.html"):
             assert os.path.getsize(os.path.join(out_dir, fn)) > 100, fn
-        assert result["method"].endswith("future-roundup-retype-v108")
+        assert result["method"].endswith("display-chain-v109")
         assert result["stats"]["records"] == len(result["items"])
 
         # v1.07 #1：AI 模型发布（题名锚定 T09，不因正文发布会词误入 T24）
@@ -173,8 +174,17 @@ def test_engine_smoke():
         assert _find(result, "某明星官宣新剧")["domainDisp"] == "域外"
         assert _find(result, "宁德时代发布")["ignored"] is True
 
-    print("triage_engine smoke OK：v1.07+v1.08 机制（T09 题名锚定 / 参考区 / S-A05 未来态 / "
-          "S-A04 汇总稿 / B1 媒体解读改判 / T01 主榜 / 域外 / 范围忽略）全部落位")
+        # v1.09 展示链路（纯展示标注，不影响评分）：论文/新闻两级 + 归入大类 A/B/C/D
+        assert paper["displayCategory"] == "论文" and "四分型" in paper["displaySubcategory"] \
+            and paper["displayClass"] == "A"
+        assert fut["displayCategory"] == "新闻" and fut["displaySubcategory"] == "工程与产业化" \
+            and fut["displayClass"] == "B(链2-5)"
+        assert pi["displaySubcategory"].startswith("观点与交流") and pi["displayClass"] == "A"
+        assert _find(result, "某明星官宣新剧")["displayCategory"] == "—"  # 域外 → 展示标域外
+        assert sum(result["stats"]["displayChain"].values()) == result["stats"]["records"]
+
+    print("triage_engine smoke OK：v1.07+v1.08+v1.09 机制（T09 题名锚定 / 参考区 / S-A05 未来态 / "
+          "S-A04 汇总稿 / B1 媒体解读改判 / T01 主榜 / 域外 / 范围忽略 / 展示链路）全部落位")
 
 
 if __name__ == "__main__":
