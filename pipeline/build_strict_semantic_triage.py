@@ -584,7 +584,16 @@ def classify_type_semantic(item):
         return type_result("T21", "C-G02/C-T05", "标题主事件是人才招聘；正文论文与技术成果仅用于介绍招聘团队",
                            recruitment_title, [], "语义裁决")
 
-    paper_carrier = bool(item.get("doi") or _rx(r"\b10\.\d{4,9}/\S+|arXiv[:\s]*\d+|DOI", text))
+    # 2026-09-24 v1.10（C-T16 载体前提，用户口径）：literature 库一律文献（函数入口已判）；
+    # wechat/news 判定"是否文献"须 DOI×语义共决——有 DOI 不一定是文献（可能是分析/报道）：
+    #   ① 论文本体载体（《刊名》文章/全文转载/学术速递/网络首发/引用本文）→ 可 T01；
+    #   ② DOI（字段/链接/正文）只是引用线索，不再单独构成论文载体；
+    #   ③ DOI 迹象×题名媒体分析/报道框架（解读/盘点/Scientists 发现式转述等）→ 不是文献，
+    #     改判 T23 深度分析（题名锚定，与 M1 同口径），DOI 记入证据链。
+    doi_signal = bool(item.get("doi") or _rx(r"\b10\.\d{4,9}/\S+|arXiv[:\s]*\d+|\bDOI\b|doi\.org",
+                                             (item.get("url") or "") + " " + text))
+    paper_body_carrier = bool(_rx(r"《[^》]{2,20}》(?:文章|论文|全文)|学术速递|论文速递|研究进展速递|"
+                                          r"文献速递|网络首发|引用本文", title + "\n" + lead))
     # 2026-09-20 v1.04（M11）：『发表于/刊登于』从论文结构证据中移除——报纸评论（经济日报
     # 专栏『构筑生产性服务业品牌矩阵』）同样有『发表于』，不足以判定论文载体。
     paper_structure = bool(_rx(r"论文标题|论文链接|文献详情|网络首发|摘要|DOI|arXiv|"
@@ -593,6 +602,22 @@ def classify_type_semantic(item):
     paper_claim = bool(_rx(r"机理|机制|模型|方法|实验|表征|样品|仿真|第一性原理|研究发现|研究团队|研究表明|研究显示|研究提出|研究|"
                                   r"identify|discover|demonstrat|mechanism|degradation|experiment|model|study|studies", text))
     industrial_title = bool(base.INDUS_TITLE_R.search(title))
+    # v1.10：题名级媒体分析/报道框架词——DOI 迹象×此框架 ⇒ 引用论文的报道/分析稿，非文献本体。
+    # （综述：/study shows/Scientists discover 属转述框架；全文转载/速递载体在上方 paper_body_carrier 先行豁免）
+    media_analysis_frame = bool(_rx(r"解读|评述|评析|剖析|深度分析|盘点|梳理|知识分享|一文读懂|科普|评论|观点|详解|拆解|综述[：:｜]|"
+                                            r"Top\s*\d+|周榜|月榜|据(?:报道|了解)|"
+                                            r"科学家(?:发现|揭示)|研究者(?:发现|揭示)|[Ss]cientists?\s+(?:discover|find|reveal|turn)|"
+                                            r"[Ss]tudy\s+(?:shows|finds|reveals|suggests)",
+                                            title))
+    if doi_signal and media_analysis_frame and paper_claim and not paper_body_carrier:
+        return type_result("T23", "C-G05/C-T16-DOI载体前提",
+                           "题名呈媒体分析/报道框架×DOI 引用线索——引用论文的报道/分析稿，非文献本体（有 DOI ≠ 论文）；"
+                           "按主事件落深度分析，DOI 记入证据链",
+                           _rx(r"解读|评述|评析|剖析|深度分析|盘点|梳理|知识分享|一文读懂|科普|评论|观点|详解|拆解|综述[：:｜]|"
+                               r"Top\s*\d+|据(?:报道|了解)|[Ss]cientists?\s+(?:discover|find|reveal|turn)|"
+                               r"[Ss]tudy\s+(?:shows|finds|reveals|suggests)", title)
+                           + "＋DOI:" + (_norm_doi(item.get("doi")) or "正文/链接引用"),
+                           [], "规则裁决")
 
     checks = []
     def add(tid, ok, rule, reason, evidence, certainty="明确"):
@@ -600,8 +625,10 @@ def classify_type_semantic(item):
             checks.append({"tid": tid, "rule": rule, "reason": reason,
                            "evidence": evidence, "certainty": certainty})
 
-    add("T01", (paper_carrier and paper_claim) or (paper_structure and paper_claim and not industrial_title),
-        "C-G05/C-T01", "论文载体或学术结构＋可识别学术命题", _rx(r"\b10\.\d{4,9}/\S+|DOI|论文|期刊|研究发现|机理|模型", text))
+    # v1.10（C-T16）：本体载体（全文转载/速递/网络首发）或题名/导语级论文结构锚定＋学术命题才可 T01；
+    # 正文级 DOI 提及不再单独构成载体（DOI 归入 doi_signal 引用线索，配合媒体框架走 C-T16 改判）。
+    add("T01", (paper_body_carrier and paper_claim) or (paper_structure and paper_claim and not industrial_title),
+        "C-G05/C-T01", "论文载体或学术结构＋可识别学术命题", _rx(r"《[^》]{2,20}》|学术速递|网络首发|\b10\.\d{4,9}/\S+|DOI|论文|期刊|研究发现|机理|模型", text))
     add("T03", bool(_rx(r"(?:CN|US|WO|EP)\s*\d{6,}[A-Z]\d?|申请号|公开号|专利授权|无效宣告|专利许可", text)),
         "T03-必要条件", "存在专利文献标识或明确权利状态事件", _rx(r"(?:CN|US|WO|EP)\s*\d{6,}[A-Z]\d?|申请号|公开号|专利授权|无效宣告", text))
     add("T04", bool(_rx(r"软件著作权|软著|集成电路布图|植物新品种", text) and _rx(r"登记|授权|取得|转让|变更", text)),
@@ -947,8 +974,12 @@ def _route_frontier(item, dom):
 
 def _evidence_level(item):
     text = item.get("meta", "") + " " + item["title"] + " " + item["body"][:500]
-    if item.get("doi") or item["src"] == "literature":
+    # 2026-09-24 v1.10（C-T16）：非文献源的 DOI 是引用线索不是原始载体——E1 收窄为 literature 源；
+    # wechat/news 带 DOI 字段的报道按 E2 可溯源二手来源（DOI 可回查原文，仍高于单一媒体转载）。
+    if item["src"] == "literature":
         return "E1", "论文/DOI 原始载体"
+    if item.get("doi"):
+        return "E2", "报道引用论文 DOI（二手可溯源）"
     if re.search(r"政府|发改委|能源局|工信部|财政部|生态环境部|委员会|交易所|公司公告|官网|官方", text, re.I):
         return "E1", "官方或监管原始载体"
     if re.search(r"大学|研究院|研究所|实验室|协会|学会|检测中心|TÜV|SGS|UL|Reuters|彭博", text, re.I):
@@ -2242,7 +2273,7 @@ def write_outputs(items, stats, outside_summary):
     outside_csv_path = os.path.join(HERE, "域外内容分析_20260615-23.csv")
     html_path = os.path.join(HERE, "三库严格语义分类看板_20260615-23.html")
     with open(json_path, "w", encoding="utf-8") as f:
-        json.dump({"method": "semantic-llm-calibrated-v5+three-band-scoring-v1.04+priority-tiers+s10-band-policy-v104+llm-merge+event-dedup-v105+paper-band-v106b+ref-zone-v107+future-roundup-retype-v108+display-chain-v109",
+        json.dump({"method": "semantic-llm-calibrated-v5+three-band-scoring-v1.04+priority-tiers+s10-band-policy-v104+llm-merge+event-dedup-v105+paper-band-v106b+ref-zone-v107+future-roundup-retype-v108+display-chain-v109+doi-carrier-premise-v110",
                    "stats": stats,
                    "outsideSummary": outside_summary, "items": items}, f, ensure_ascii=False)
     with open(csv_path, "w", encoding="utf-8-sig", newline="") as f:

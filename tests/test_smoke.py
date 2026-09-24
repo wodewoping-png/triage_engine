@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
-"""triage_engine 冒烟测试：合成 9 条行记录跑通规则层全流程，
-覆盖 v1.07 两个新机制（AI 模型发布题名锚定 T09、T02/T23 参考区）与
-v1.08 三个新机制（S-A05 未来态计划低、S-A04 常规发电汇总稿低、B1 媒体投资解读改判 T23）。
+"""triage_engine 冒烟测试：合成 11 条行记录跑通规则层全流程，
+覆盖 v1.07 两个新机制（AI 模型发布题名锚定 T09、T02/T23 参考区）、
+v1.08 三个新机制（S-A05 未来态计划低、S-A04 常规发电汇总稿低、B1 媒体投资解读改判 T23）与
+v1.10 载体前提 C-T16（DOI×语义共决：题名媒体框架×DOI → T23；全文转载本体载体 → T01）。
 运行：PYTHONIOENCODING=utf-8 python -m pytest triage_engine/tests -q
   或：PYTHONIOENCODING=utf-8 python -m triage_engine.tests.test_smoke
 """
@@ -98,6 +99,24 @@ COOP_BOILER_BODY = (
     "背景资料：该企业曾宣称是全球首个通过国际第三方认证的钙钛矿组件企业，产线规模处于行业前列。"
 ) * 2
 
+# ---- v1.10 载体前提（C-T16：DOI×语义共决，有 DOI ≠ 论文）用例 ----
+# 假文献：题名媒体解读框架×正文 DOI 引用 → 不是文献本体，改判 T23 深度分析（入参考区）
+DOI_FAKE_PAPER_TITLE = "深度解读：固态电解质界面机理新进展"
+DOI_FAKE_PAPER_BODY = (
+    "研究团队通过系统的实验表征与第一性原理仿真，揭示了硫化物固态电解质的界面离子输运机制；"
+    "循环测试表明库仑效率与容量保持率均显著提升，机理分析与模型计算相互印证。"
+    "本文原论文发表于国际期刊，DOI: 10.1038/xyz，读者可回查原文验证数据。"
+    "编辑结合行业动态给出解读：界面稳定性仍是固态电池产业化的关键瓶颈。"
+) * 2
+
+# 真载体：《刊名》文章全文转载＋『引用本文』DOI → 论文本体，T01（v1.10 rescue 通道）
+DOI_REPRINT_PAPER_TITLE = "《储能科学与技术》文章|ZIF-8衍生核壳Si@C负极的制备与电化学性能"
+DOI_REPRINT_PAPER_BODY = (
+    "本文为期刊全文转载。研究团队通过系统的实验表征与第一性原理仿真，设计了ZIF-8衍生的"
+    "核壳结构Si@C负极材料；循环测试表明比容量与循环稳定性均显著提升，机理分析与模型计算相互印证。"
+    "引用本文 DOI: 10.12028/j.cee.2026.0123，样品制备流程与对照实验详见原文。"
+) * 2
+
 
 def _rows():
     return [
@@ -122,6 +141,11 @@ def _rows():
          "meta": "能源观察", "body": POLICY_INTERP_BODY, "doi": "", "body_prep": "", "content_quality": "full"},
         {"src": "wechat", "date": D, "title": COOP_BOILER_TITLE, "url": "https://mp.weixin.qq.com/s/demo10",
          "meta": "钙钛矿观察", "body": COOP_BOILER_BODY, "doi": "", "body_prep": "", "content_quality": "full"},
+        {"src": "wechat", "date": D, "title": DOI_FAKE_PAPER_TITLE, "url": "https://mp.weixin.qq.com/s/demo11",
+         "meta": "深科技观察", "body": DOI_FAKE_PAPER_BODY, "doi": "", "body_prep": "", "content_quality": "full"},
+        {"src": "wechat", "date": D, "title": DOI_REPRINT_PAPER_TITLE, "url": "https://mp.weixin.qq.com/s/demo12",
+         "meta": "储能科学与技术", "body": DOI_REPRINT_PAPER_BODY, "doi": "", "body_prep": "",
+         "content_quality": "full"},
     ]
 
 
@@ -130,7 +154,7 @@ def _find(result, title_prefix):
 
 
 def test_engine_smoke():
-    assert ENGINE_VERSION == "1.09"
+    assert ENGINE_VERSION == "1.10"
     with tempfile.TemporaryDirectory() as out_dir:
         result = run(_rows(), out_dir)
 
@@ -138,7 +162,7 @@ def test_engine_smoke():
         for fn in ("semantic_results.json", "semantic_results.csv",
                    "域外内容分析_20260615-23.csv", "三库严格语义分类看板_20260615-23.html"):
             assert os.path.getsize(os.path.join(out_dir, fn)) > 100, fn
-        assert result["method"].endswith("display-chain-v109")
+        assert result["method"].endswith("doi-carrier-premise-v110")
         assert result["stats"]["records"] == len(result["items"])
 
         # v1.07 #1：AI 模型发布（题名锚定 T09，不因正文发布会词误入 T24）
@@ -154,7 +178,7 @@ def test_engine_smoke():
             assert x["section"] == "参考区"
             assert x["scoreBand"] == "参考" and x["attention"] == "参考" and not x["priorityTier"]
             assert x["bandUnderlying"] in ("高", "中", "低")
-        assert result["stats"]["refZone"] == 3  # T02 报告 + T23 深度分析 + B1 改判的十五五解读稿
+        assert result["stats"]["refZone"] == 4  # T02 报告 + T23 深度分析 + B1 改判 + C-T16 假文献改判
 
         # v1.08 W1：未来态里程碑（预计10月转入商业运营）→ S-A05 硬上限低·P2
         # （S8 已为低时走"上限确认"审计痕并后置 P2，与 S10-D 同惯例）
@@ -187,6 +211,20 @@ def test_engine_smoke():
         paper = _find(result, "Sulfide solid")
         assert paper["typeId"] == "T01" and paper["section"] == "主榜"
 
+        # v1.10 C-T16 假文献：题名『深度解读』媒体框架×正文 DOI 引用 → 不是文献本体，
+        # 改判 T23 深度分析（typeRule=C-G05/C-T16-DOI载体前提），入参考区
+        fake = _find(result, "深度解读：固态电解质")
+        assert fake["typeId"] == "T23", fake["type"]
+        assert "C-T16" in fake["typeRule"], fake["typeRule"]
+        assert fake["section"] == "参考区" and fake["scoreBand"] == "参考"
+
+        # v1.10 C-T16 rescue：《刊名》文章全文转载＋『引用本文』DOI → 论文本体 T01，
+        # 展示大类=论文（reprint 豁免：不走媒体源→新闻/评论/观点分支）
+        reprint = _find(result, "《储能科学与技术》文章")
+        assert reprint["typeId"] == "T01", reprint["type"]
+        assert reprint["section"] == "主榜"
+        assert reprint["displayCategory"] == "论文" and reprint["displaySubcategory"] == "研究型"
+
         # 域外 + 范围忽略
         assert _find(result, "某明星官宣新剧")["domainDisp"] == "域外"
         assert _find(result, "宁德时代发布")["ignored"] is True
@@ -201,8 +239,9 @@ def test_engine_smoke():
         assert _find(result, "某明星官宣新剧")["displayCategory"] == "—"  # 域外 → 展示标域外
         assert sum(result["stats"]["displayChain"].values()) == result["stats"]["records"]
 
-    print("triage_engine smoke OK：v1.07+v1.08+v1.09 机制（T09 题名锚定 / 参考区 / S-A05 未来态 / "
-          "S-A04 汇总稿 / B1 媒体解读改判 / T01 主榜 / 域外 / 范围忽略 / 展示链路）全部落位")
+    print("triage_engine smoke OK：v1.07+v1.08+v1.09+v1.10 机制（T09 题名锚定 / 参考区 / S-A05 未来态 / "
+          "S-A04 汇总稿 / B1 媒体解读改判 / C-T16 载体前提（假文献→T23·全文转载→T01） / "
+          "T01 主榜 / 域外 / 范围忽略 / 展示链路）全部落位")
 
 
 if __name__ == "__main__":
