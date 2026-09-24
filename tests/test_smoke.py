@@ -90,6 +90,14 @@ POLICY_INTERP_BODY = (
     "分析认为，风光基地、跨区输电与灵活性资源是主要方向，产业链公司有望受益。"
 ) * 2
 
+# v1.09 S-F01 窄修：T12 合作稿正文 boilerplate『全球首个+认证』背景句不得借首证地板抬档
+COOP_BOILER_TITLE = "某钙钛矿企业与地方研究院签署战略合作协议，共拓应用新空间"
+COOP_BOILER_BODY = (
+    "双方今日签署战略合作协议，将在钙钛矿组件的示范应用与产线合作方面开展长期协作，"
+    "研究院提供技术支撑，企业负责产业化推进，首批合作聚焦分布式光伏场景。"
+    "背景资料：该企业曾宣称是全球首个通过国际第三方认证的钙钛矿组件企业，产线规模处于行业前列。"
+) * 2
+
 
 def _rows():
     return [
@@ -112,6 +120,8 @@ def _rows():
          "meta": "综合能源网", "body": GEN_ROUNUP_BODY, "doi": "", "body_prep": "", "content_quality": "full"},
         {"src": "wechat", "date": D, "title": POLICY_INTERP_TITLE, "url": "https://mp.weixin.qq.com/s/demo9",
          "meta": "能源观察", "body": POLICY_INTERP_BODY, "doi": "", "body_prep": "", "content_quality": "full"},
+        {"src": "wechat", "date": D, "title": COOP_BOILER_TITLE, "url": "https://mp.weixin.qq.com/s/demo10",
+         "meta": "钙钛矿观察", "body": COOP_BOILER_BODY, "doi": "", "body_prep": "", "content_quality": "full"},
     ]
 
 
@@ -166,6 +176,13 @@ def test_engine_smoke():
         assert "媒体解读改判" in pi["typeRule"]
         assert pi["section"] == "参考区" and pi["scoreBand"] == "参考"
 
+        # v1.09 S-F01 窄修：T12 合作稿正文 boilerplate『全球首个+认证』不得借首证地板抬档
+        # （首证地板限技术事件类 T06–T10；战略合作稿封顶54→低，v1.01 口径恢复）
+        coop = _find(result, "某钙钛矿企业与地方研究院")
+        assert coop["typeId"] == "T12", coop["type"]
+        assert coop["scoreBand"] == "低" and coop["attention"] == "低", coop["scoreBand"]
+        assert not any("S-F01" in str(g) for g in coop["gateActions"] if "地板" in str(g))
+
         # 文献载体 → T01（本例非正刊非瓶颈 → v1.06 统一中档，留主榜）
         paper = _find(result, "Sulfide solid")
         assert paper["typeId"] == "T01" and paper["section"] == "主榜"
@@ -174,8 +191,9 @@ def test_engine_smoke():
         assert _find(result, "某明星官宣新剧")["domainDisp"] == "域外"
         assert _find(result, "宁德时代发布")["ignored"] is True
 
-        # v1.09 展示链路（纯展示标注，不影响评分）：论文/新闻两级 + 归入大类 A/B/C/D
-        assert paper["displayCategory"] == "论文" and "四分型" in paper["displaySubcategory"] \
+        # v1.09 展示链路（纯展示标注，不影响评分）：论文/新闻两级 + 归入大类 A/B/C/D；
+        # 论文四分型逐条判定（题名综述词→综述；评估/情景词→分析类；媒体源→新闻/评论/观点；默认研究型）
+        assert paper["displayCategory"] == "论文" and paper["displaySubcategory"] == "研究型" \
             and paper["displayClass"] == "A"
         assert fut["displayCategory"] == "新闻" and fut["displaySubcategory"] == "工程与产业化" \
             and fut["displayClass"] == "B(链2-5)"

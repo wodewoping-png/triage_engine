@@ -1390,10 +1390,11 @@ TIER_RANK = {"P0": 0, "P1": 1, "P2": 2}
 # 纯展示标注层：按最终类型 T01–T25 映射 展示大类/展示小类/归入大类（A 科研知识 / B 产业化主链 /
 # C 企业支撑 / D 外部环境，见 02 机制表《大类与产业链导航》）。不参与 S1–S10 任何评分、档位、
 # 优先级判定（用户口径："程序的输出结果包含展示的新闻类型，但不影响后台评分"）。
-# 论文（T01）单列展示大类；小类=四分型（引擎不逐条解析分型，按 T01 整体标注，cls_data 分型线索
-# 仍在评分卡内起作用）。T24 会议=场合标签，展示挂"观点与交流"，发布物按实质归类由类型层负责。
+# 论文（T01）单列展示大类；小类=四分型逐条判定（用户 2026-09-24 追加口径：综述/研究型/分析类/
+# 新闻·评论·观点 不得混在一起）——由 _paper_display_subtype 按题名证据级联判定，MAP 里为默认值。
+# T24 会议=场合标签，展示挂"观点与交流"，发布物按实质归类由类型层负责。
 DISPLAY_CHAIN_MAP = {
-    "T01": ("论文", "四分型（综述/研究型/分析型/新闻·评论·观点）", "A"),
+    "T01": ("论文", "研究型", "A"),
     "T02": ("新闻", "知识资产", "A"),
     "T03": ("新闻", "知识资产", "A"),
     "T04": ("新闻", "知识资产", "A"),
@@ -1419,6 +1420,37 @@ DISPLAY_CHAIN_MAP = {
     "T24": ("新闻", "观点与交流（场合标签）", "A"),
     "T25": ("待定", "信息不足", "—"),
 }
+
+# ---- v1.09 论文四分型（用户 2026-09-24 口径：四个小类逐条展开，不整体标注）----
+# 确定性题名证据级联（纯展示，不进评分；与《新闻类型展示分类.xlsx》四小类逐字对齐）：
+#   ① 非文献源（news/wechat）的 T01 = 论文报道/媒体解读稿 → 新闻/评论/观点
+#      （全文转载特征除外：《刊名》文章/引用本文 → 仍按论文体裁判）；
+#   ② 题名综述词（综述/研究进展/展望/review/perspective/primer/meta-analysis…）→ 综述；
+#   ③ 题名评估分析词（技术经济/生命周期/碳足迹/情景/assessment/techno-economic/LCA…）→ 分析类；
+#   ④ 默认 → 研究型。
+PAPER_SUBTYPE_REVIEW_R = re.compile(
+    r"综述|研究进展|进展与挑战|系统性回顾|研究展望|展望|路线图"
+    r"|\b(reviews?|primer|advances|outlook|perspectives?|roadmap|survey|meta[- ]analys(?:is|es)|progress)\b",
+    re.I)
+PAPER_SUBTYPE_ANALYSIS_R = re.compile(
+    r"技术经济|经济性分析|生命周期|碳足迹|水足迹|情景|影响评估|政策分析|市场分析|成本分析|评估|评价"
+    r"|\b(assessments?|evaluations?|techno[- ]economic|life[- ]cycle|carbon footprint|water footprint"
+    r"|scenarios?|forecasts?|LCA|TEA)\b",
+    re.I)
+PAPER_REPRINT_R = re.compile(r"《[^》]{2,20}》(?:文章|论文|全文)")
+
+
+def _paper_display_subtype(src, title, body=""):
+    """论文展示四分型：综述 / 研究型 / 分析类 / 新闻/评论/观点（纯展示层判定）。"""
+    title = title or ""
+    reprint = PAPER_REPRINT_R.search(title) or "引用本文" in (body or "")[:400]
+    if src != "literature" and not reprint:
+        return "新闻/评论/观点"
+    if PAPER_SUBTYPE_REVIEW_R.search(title):
+        return "综述"
+    if PAPER_SUBTYPE_ANALYSIS_R.search(title):
+        return "分析类"
+    return "研究型"
 
 # ---- 2026-09-19 v1.03：S10 档位政策层常数（单源 score_data.BAND_POLICY_V103，此处只展开）----
 SOFT_LOW_TYPES = set(BAND_POLICY_V103["soft_low_types"])
@@ -1647,10 +1679,14 @@ def _s10_policy(item, dom, typ, score):
         if bottleneck:
             floor, floor_tier = "高", "P0"
             floor_reason = "S-B01 瓶颈事实：题名锚定供应瓶颈＋程度/量化证据（重点瓶颈=高档本体载荷）→ 档位地板=高"
-        elif first_verified and focus:
+        elif first_verified and focus and tid in {"T06", "T07", "T08", "T09", "T10"}:
             floor, floor_tier = "高", "P0"
+            # 2026-09-24 v1.09（v101 复核）：S-F01 限技术事件类 T06–T10——首证事实以载体为本位
+            # （认证/工程验证/项目/产品/运行）；T12 合作·T16 市场·T17 供应链等软类型不再经正文
+            # boilerplate『首个+认证』背景句抬档（v1.01 口径：战略合作/招聘题名不得高档；
+            # v1.03c 意图：软类型可用的地板是政策评论/顶刊/科研转载，不含首证通道）。
             floor_reason = ("S-F01 首创认证：『首个/首创＋认证/标准/投产/投运/商业运营』首证事实"
-                            "（已排除基金·会议语境与在建态） → 档位地板=高")
+                            "（技术事件类 T06–T10；已排除基金·会议语境与在建态） → 档位地板=高")
         elif (focus and tid in {"T08", "T10"} and title_milestone and not future_landed
               and SCALE_100MW_R.search(title)):
             floor, floor_tier = "高", "P0"
@@ -2118,8 +2154,11 @@ def build():
             priority_tier = ""
         trl_info = score.get("trlInfo") or {}
         # v1.09 展示链路：纯展示标注（域外记录标“域外”），在评分/档位/分区全部落定后追加，不影响任何判定。
+        # 论文（T01）四分型逐条判定（用户 2026-09-24 口径：综述/研究型/分析类/新闻·评论·观点）。
         _dc = (("—", "域外", "—") if dom["disp"] == "域外"
                else DISPLAY_CHAIN_MAP.get(typ["tid"], ("待定", "信息不足", "—")))
+        if dom["disp"] != "域外" and typ["tid"] == "T01":
+            _dc = ("论文", _paper_display_subtype(item["src"], item["title"], item.get("body", "")), "A")
         out.append({
             "date": item["date"], "src": item["src"], "meta": item["meta"], "title": item["title"],
             "url": item["url"], "doi": item.get("doi", ""), "duplicates": item["duplicates"],
@@ -2177,9 +2216,12 @@ def build():
         "s10Capped": sum(any("S10 上限" in str(g) for g in x["gateActions"]) for x in out),
         "sourceHinted": sum(any("S-V02" in str(g) for g in x["gateActions"]) for x in out),
         "llmJudged": sum(1 for x in out if x["llmJudged"]),
-        # v1.09 展示链路计数（仅统计，不参与任何判定）
+        # v1.09 展示链路计数（仅统计，不参与任何判定）；论文四分型逐条展开计数
         "displayChain": {c: sum(x["displayCategory"] == c for x in out)
                          for c in ("论文", "新闻", "待定", "域外", "—")},
+        "paperSubtypes": {s: sum(1 for x in out if x["typeId"] == "T01" and x["domainDisp"] != "域外"
+                                 and x["displaySubcategory"] == s)
+                          for s in ("综述", "研究型", "分析类", "新闻/评论/观点")},
     }
     outside = [x for x in out if x["domainDisp"] == "域外"]
     outside_summary = {
@@ -2283,7 +2325,7 @@ h1{font-size:20px;margin:0 0 4px}.sub{color:#888;font-size:12px;margin-bottom:14
   <th>日期</th><th>来源</th><th>标题</th><th>处置</th><th>参考分</th><th>技术域</th><th>新闻类型</th><th>展示分类</th>
 </tr></thead><tbody id="tbr"></tbody></table></div>
 <div id="detail"></div>
-<details class="method"><summary>分类与评分口径（v1.09：S10 档位政策 + 论文统一档位 + 参考区 + 未来态/汇总稿守卫 + 展示链路）</summary><p>默认域内：除明确域外理由外所有记录给出领域/类型划分；大模型按两份基准 docx（文献技术分类规则、新闻类型语义分类规则）语义裁决，规则层校验兜底。载体形态优先（直播→T24、N部门部署→T19）、主事件锚定（正文杂质不决定主类型）、标题阶段跃迁不落 T23。域外必须说明通读正文后排除过的语义路径及具体原因。</p><p>价值评分执行机制表S1–S8，只输出高、中、低三档；S9 优先级分层：最终档位=min(S8档位, U_type)，排序键=(优先级层P0/P1/P2, -S8分值)。S10 档位政策（v1.03）：重点瓶颈→高；一般技术类→中；投融资、不相干领域、高TRL产业动态（建厂等）、会议、宣传文案、无明确技术细节的建厂/招标/立项→低。地板：瓶颈事实(S-B01)/首创认证(S-F01)/国家重点规划题名(S-P02)/顶刊论文转载(S-P01)→高；聚焦域政策→中。上限：汽车白名单（固态/钠电/新型电池/光伏装车/直接CCUS/车网结合/智驾升阶）未中、生物医药无爆点（克隆/脑机接口/复活等）、非聚焦领域（电池/能源/零碳脱碳/AI/半导体外）、软信息与无技术细节类型→低。S-V02 信源提示分：专业编辑信源（REAI Lab、国际能源小数据等）+5（草案）。分层与档位政策不改写分数本身。</p><p><b>v1.04–v1.06 增量</b>：S10 细化（瓶颈题名锚定、招投标公告低档、首创防护、工程里程碑高地板、地方申报硬上限、市级规划防护、实质技术案例地板）；v1.05 事件级去重 C-R01/C-R03（DOI /《》文号名 / 题名 bigram Jaccard≥0.75；主记录=正文最完整·证据最高·最早发布）；v1.06 论文统一档位——S-P01v2 Nature/Science 正刊（子刊不算）→高、S-P09 题名突破锚定→最低中、S-P10 其余论文/中文转载→统一中档；v1.06b 顶刊载体语境守卫与系列文（上/下）防误并。</p><p><b>v1.07 参考区</b>：T02 研究报告（IEA/DOE 等机构报告）与 T23 深度分析与评论单独分区展示（主表下方"深度分析与研究报告 · 参考区"表），不与常规新闻/文献/政策标准同榜；评分仅作参考、不分高中低档（attention=参考、档位=参考、优先级层清空），底层档位保留在 bandUnderlying 字段与明细页，S1–S8/S10 审计链原样保留。T01 论文仍在主榜（v1.06 统一中档）。</p><p><b>v1.08 未来态/汇总稿/媒体解读</b>：S-A05 未来态计划硬上限——预计/将/拟×（时间）×投运·商业运营·并网 或 将在/将部署 是将来时计划（事件未发生）→ 低，首座×示范在建仍走 S-P05b 中地板；S-F02 里程碑与 S-F01 首证同步不触发；S-A04 常规发电项目汇总稿硬上限——多个/一批×新能源项目×并网/投产族（晶硅光伏/常规风电/水电等成熟技术组合）→ 低，题名点名钙钛矿/量子点/有机/海上漂浮式/单机大容量风机等低TRL新型发电技术除外；S-P02 须政策本体锚点（《》文件名×发布/印发族或国家级主体），十五五类媒体投资解读稿（出炉/定调/释放信号/投资方向）改判 T23 入参考区。</p><p><b>v1.09 展示链路与预置叶冻结</b>：展示分类＝论文（T01 四分型）／新闻（知识资产/工程与产业化/企业经营合作与资本/资源市场与产业链/政策法规与标准/人才与组织动态/观点与交流）＋归入大类 A科研知识·B产业化主链(链2-5)·C企业支撑·D外部环境（依据《新闻类型展示分类.xlsx》与 02 机制表《大类与产业链导航》），纯展示标注不影响 S1–S10 评分/档位/优先级；LLM 语义判定层预置叶冻结——除非与零碳产业/AI与智能科技/通用技术完全无关（域外），新闻与文献必须归入预置叶子节点/预置类型，禁止自拟"扩展:"新路径与新增节点（2026-09-24 口径）。</p></details>
+<details class="method"><summary>分类与评分口径（v1.09：S10 档位政策 + 论文统一档位 + 参考区 + 未来态/汇总稿守卫 + 展示链路）</summary><p>默认域内：除明确域外理由外所有记录给出领域/类型划分；大模型按两份基准 docx（文献技术分类规则、新闻类型语义分类规则）语义裁决，规则层校验兜底。载体形态优先（直播→T24、N部门部署→T19）、主事件锚定（正文杂质不决定主类型）、标题阶段跃迁不落 T23。域外必须说明通读正文后排除过的语义路径及具体原因。</p><p>价值评分执行机制表S1–S8，只输出高、中、低三档；S9 优先级分层：最终档位=min(S8档位, U_type)，排序键=(优先级层P0/P1/P2, -S8分值)。S10 档位政策（v1.03）：重点瓶颈→高；一般技术类→中；投融资、不相干领域、高TRL产业动态（建厂等）、会议、宣传文案、无明确技术细节的建厂/招标/立项→低。地板：瓶颈事实(S-B01)/首创认证(S-F01)/国家重点规划题名(S-P02)/顶刊论文转载(S-P01)→高；聚焦域政策→中。上限：汽车白名单（固态/钠电/新型电池/光伏装车/直接CCUS/车网结合/智驾升阶）未中、生物医药无爆点（克隆/脑机接口/复活等）、非聚焦领域（电池/能源/零碳脱碳/AI/半导体外）、软信息与无技术细节类型→低。S-V02 信源提示分：专业编辑信源（REAI Lab、国际能源小数据等）+5（草案）。分层与档位政策不改写分数本身。</p><p><b>v1.04–v1.06 增量</b>：S10 细化（瓶颈题名锚定、招投标公告低档、首创防护、工程里程碑高地板、地方申报硬上限、市级规划防护、实质技术案例地板）；v1.05 事件级去重 C-R01/C-R03（DOI /《》文号名 / 题名 bigram Jaccard≥0.75；主记录=正文最完整·证据最高·最早发布）；v1.06 论文统一档位——S-P01v2 Nature/Science 正刊（子刊不算）→高、S-P09 题名突破锚定→最低中、S-P10 其余论文/中文转载→统一中档；v1.06b 顶刊载体语境守卫与系列文（上/下）防误并。</p><p><b>v1.07 参考区</b>：T02 研究报告（IEA/DOE 等机构报告）与 T23 深度分析与评论单独分区展示（主表下方"深度分析与研究报告 · 参考区"表），不与常规新闻/文献/政策标准同榜；评分仅作参考、不分高中低档（attention=参考、档位=参考、优先级层清空），底层档位保留在 bandUnderlying 字段与明细页，S1–S8/S10 审计链原样保留。T01 论文仍在主榜（v1.06 统一中档）。</p><p><b>v1.08 未来态/汇总稿/媒体解读</b>：S-A05 未来态计划硬上限——预计/将/拟×（时间）×投运·商业运营·并网 或 将在/将部署 是将来时计划（事件未发生）→ 低，首座×示范在建仍走 S-P05b 中地板；S-F02 里程碑与 S-F01 首证同步不触发；S-A04 常规发电项目汇总稿硬上限——多个/一批×新能源项目×并网/投产族（晶硅光伏/常规风电/水电等成熟技术组合）→ 低，题名点名钙钛矿/量子点/有机/海上漂浮式/单机大容量风机等低TRL新型发电技术除外；S-P02 须政策本体锚点（《》文件名×发布/印发族或国家级主体），十五五类媒体投资解读稿（出炉/定调/释放信号/投资方向）改判 T23 入参考区。</p><p><b>v1.09 展示链路与预置叶冻结</b>：展示分类＝论文（T01 四分型逐条判定：综述／研究型／分析类／新闻·评论·观点）／新闻（知识资产/工程与产业化/企业经营合作与资本/资源市场与产业链/政策法规与标准/人才与组织动态/观点与交流）＋归入大类 A科研知识·B产业化主链(链2-5)·C企业支撑·D外部环境（依据《新闻类型展示分类.xlsx》与 02 机制表《大类与产业链导航》），纯展示标注不影响 S1–S10 评分/档位/优先级；LLM 语义判定层预置叶冻结——除非与零碳产业/AI与智能科技/通用技术完全无关（域外），新闻与文献必须归入预置叶子节点/预置类型，禁止自拟"扩展:"新路径与新增节点（2026-09-24 口径）。</p></details>
 <script>
 const DATA=__DATA_JSON__, STATS=__STATS_JSON__, OUTSIDE=__OUTSIDE_JSON__;
 let sortK="date", sortAsc=true, selIdx=-1;
@@ -2336,6 +2378,10 @@ def validate(items, stats, outside_summary):
     assert sum(stats["displayChain"].values()) == len(items), "displayChain 计数不闭合"
     assert all(x["typeId"] in DISPLAY_CHAIN_MAP for x in items if x["domainDisp"] != "域外"), \
         "DISPLAY_CHAIN_MAP 未覆盖出现的类型"
+    # v1.09 论文四分型：域内 T01 小类必须为四值之一，且计数与 displayChain.论文 闭合
+    assert all(x["displaySubcategory"] in ("综述", "研究型", "分析类", "新闻/评论/观点")
+               for x in items if x["domainDisp"] != "域外" and x["typeId"] == "T01"), "论文四分型小类非法"
+    assert sum(stats["paperSubtypes"].values()) == stats["displayChain"]["论文"], "paperSubtypes 计数不闭合"
     for fn in ("semantic_results.json", "semantic_results.csv", "域外内容分析_20260615-23.csv",
                "三库严格语义分类看板_20260615-23.html"):
         assert os.path.getsize(os.path.join(HERE, fn)) > 100
