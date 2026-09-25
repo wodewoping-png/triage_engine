@@ -20,13 +20,16 @@ PKG_ROOT = os.path.dirname(os.path.abspath(__file__))
 PIPELINE_DIR = os.path.join(PKG_ROOT, "pipeline")
 RULES_DIR = os.path.join(PKG_ROOT, "rules")
 
-ENGINE_VERSION = "1.10"
+ENGINE_VERSION = "1.11"
 METHOD_TAG = ("semantic-llm-calibrated-v5+three-band-scoring-v1.04+priority-tiers"
               "+s10-band-policy-v104+llm-merge+event-dedup-v105+paper-band-v106b+ref-zone-v107"
-              "+future-roundup-retype-v108+display-chain-v109+doi-carrier-premise-v110")
+              "+future-roundup-retype-v108+display-chain-v109+doi-carrier-premise-v110"
+              "+direct-banding-v111")
 
+# v1.11 直评口径（用户 2026-09-25 修订）：不设 参考/待定/忽略 类目——入域直接三档，域外不评分。
 OUTPUT_FILES = ("semantic_results.json", "semantic_results.csv",
-                "域外内容分析_20260615-23.csv", "三库严格语义分类看板_20260615-23.html")
+                "域外内容分析_20260615-23.csv",
+                "三库严格语义分类看板_20260615-23.html")
 
 REQUIRED_ROW_KEYS = ("src", "date", "title")
 
@@ -78,7 +81,7 @@ def _check_rows(rows):
 
 
 def _make_validator(out_dir):
-    """通用结构校验（替代原 validate 的固定日期窗断言；v1.07 参考区断言保留）。"""
+    """通用结构校验（替代原 validate 的固定日期窗断言；v1.11 直评口径契约）。"""
     def validate(items, stats, outside_summary):
         assert items and stats["records"] == len(items), "记录数与 stats 不一致"
         assert all(x["domainRule"] and x["typeRule"] for x in items), "裁决规则字段缺失"
@@ -88,13 +91,11 @@ def _make_validator(out_dir):
                    for x in outside), "域外记录缺结构化原因"
         assert all(not x["outsideReason"] for x in items if x["domainDisp"] != "域外")
         for key in ("reasons", "types", "topics", "sources"):
-            assert sum(row["count"] for row in outside_summary[key]) == outside_summary["total"], key
-        refzone = [x for x in items if x["section"] == "参考区"]
-        assert len(refzone) == stats["refZone"], "refZone 统计与分区字段不一致"
-        assert all(x["typeId"] in {"T02", "T23"} for x in refzone), "参考区只允许 T02/T23"
-        assert all(x["scoreBand"] == "参考" and x["attention"] == "参考" and not x["priorityTier"]
-                   for x in refzone), "参考区不得携带高中低档位或优先级层"
-        assert all(x["bandUnderlying"] in ("高", "中", "低") for x in refzone), "参考区底层档位缺失"
+            assert sum(r["count"] for r in outside_summary[key]) == outside_summary["total"], key
+        # v1.11 直评口径：不设 参考/待定/忽略 类目——入域直接三档，域外不评分。
+        assert all(x["attention"] in ("高", "中", "低", "域外") for x in items), "存在 参考/待定/忽略 类目残留"
+        assert all(x["attention"] == x["scoreBand"] for x in items
+                   if x["domainDisp"] != "域外"), "入域记录缺三档"
         for fn in OUTPUT_FILES:
             p = os.path.join(out_dir, fn)
             assert os.path.isfile(p) and os.path.getsize(p) > 100, f"输出缺失或过小：{fn}"
@@ -102,14 +103,17 @@ def _make_validator(out_dir):
 
 
 def run(rows, out_dir, llm_decisions=None):
-    """执行规则层全流程（分类 → 评分 S1–S8 → S9 分层 → S10 档位政策 → 参考区 → 事件级去重 → 四件套输出）。
+    """执行规则层全流程（分类 → 评分 S1–S8 → S9 分层 → S10 档位政策 → 事件级去重
+    → v1.11 直评口径 → 四件套输出）。
 
     参数：
       rows: 行记录字典列表。必填键：src(news-spider|wechat|literature)/date(ISO)/title/body；
             建议键：url/meta/doi/body_prep/content_quality(full|abstract|preview|digest|empty)。
       out_dir: 输出目录（不存在则创建）。写入四件套：
             semantic_results.json / semantic_results.csv / 域外内容分析_20260615-23.csv /
-            三库严格语义分类看板_20260615-23.html
+            三库严格语义分类看板_20260615-23.html。
+            v1.11 直评口径：不设 参考/待定/忽略 类目——入域记录直接给 高/中/低（T02 走 S-R01
+            粗分档、T25 经通用技术卡兜底、范围忽略仅审计）；域外不评分。主输出即全集。
       llm_decisions: None（纯规则层，默认）；或 LLM 决策 JSON 文件路径；或决策 dict
             （{"decisions": {url: {...}}} 或 {url: {...}}，schema 见 AI_INTERFACE.md §LLM）。
 

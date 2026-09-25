@@ -1,8 +1,10 @@
 # -*- coding: utf-8 -*-
-"""triage_engine 冒烟测试：合成 11 条行记录跑通规则层全流程，
-覆盖 v1.07 两个新机制（AI 模型发布题名锚定 T09、T02/T23 参考区）、
-v1.08 三个新机制（S-A05 未来态计划低、S-A04 常规发电汇总稿低、B1 媒体投资解读改判 T23）与
-v1.10 载体前提 C-T16（DOI×语义共决：题名媒体框架×DOI → T23；全文转载本体载体 → T01）。
+"""triage_engine 冒烟测试：合成 12 条行记录跑通规则层全流程，
+覆盖 v1.07 机制（AI 模型发布题名锚定 T09）、v1.08 机制（S-A05 未来态计划低、
+S-A04 常规发电汇总稿低、B1 媒体投资解读改判 T23）、v1.10 载体前提 C-T16
+（DOI×语义共决：题名媒体框架×DOI → T23；全文转载本体载体 → T01）与
+v1.11 直评口径（不设 参考/待定/忽略 类目：入域直接 高/中/低——T02 走 S-R01 粗分档；
+域外不评分；主输出即全集、四件套）。
 运行：PYTHONIOENCODING=utf-8 python -m pytest triage_engine/tests -q
   或：PYTHONIOENCODING=utf-8 python -m triage_engine.tests.test_smoke
 """
@@ -83,7 +85,7 @@ GEN_ROUNUP_BODY = (
     "上述项目涵盖晶硅光伏、常规风电机组与配套储能，进一步优化区域能源结构。"
 ) * 2
 
-# B1：十五五媒体投资解读稿（无《》/发布/部委锚点，出炉+总投资将超框架）→ T19 改判 T23 入参考区
+# B1：十五五媒体投资解读稿（无《》/发布/部委锚点，出炉+总投资将超框架）→ T19 改判 T23
 POLICY_INTERP_TITLE = "“十五五”能源规划定调投资方向，光伏与电网总投资将超20万亿元"
 POLICY_INTERP_BODY = (
     "随着新型能源体系建设“十五五”规划出台，市场普遍关注能源领域投资布局。"
@@ -100,7 +102,7 @@ COOP_BOILER_BODY = (
 ) * 2
 
 # ---- v1.10 载体前提（C-T16：DOI×语义共决，有 DOI ≠ 论文）用例 ----
-# 假文献：题名媒体解读框架×正文 DOI 引用 → 不是文献本体，改判 T23 深度分析（入参考区）
+# 假文献：题名媒体解读框架×正文 DOI 引用 → 不是文献本体，改判 T23 深度分析
 DOI_FAKE_PAPER_TITLE = "深度解读：固态电解质界面机理新进展"
 DOI_FAKE_PAPER_BODY = (
     "研究团队通过系统的实验表征与第一性原理仿真，揭示了硫化物固态电解质的界面离子输运机制；"
@@ -154,16 +156,26 @@ def _find(result, title_prefix):
 
 
 def test_engine_smoke():
-    assert ENGINE_VERSION == "1.10"
+    assert ENGINE_VERSION == "1.11"
     with tempfile.TemporaryDirectory() as out_dir:
         result = run(_rows(), out_dir)
 
-        # 四件套产出 + 结构
+        # v1.11 直评口径：四件套产出（无第五件套《移出记录》）
         for fn in ("semantic_results.json", "semantic_results.csv",
-                   "域外内容分析_20260615-23.csv", "三库严格语义分类看板_20260615-23.html"):
+                   "域外内容分析_20260615-23.csv",
+                   "三库严格语义分类看板_20260615-23.html"):
             assert os.path.getsize(os.path.join(out_dir, fn)) > 100, fn
-        assert result["method"].endswith("doi-carrier-premise-v110")
-        assert result["stats"]["records"] == len(result["items"])
+        assert result["method"].endswith("direct-banding-v111")
+        assert result["stats"]["records"] == len(result["items"]) == 12  # 12 行全部留主输出
+
+        # v1.11：不设 参考/待定/忽略 类目——attention 只剩 高/中/低/域外；审计位归零
+        assert {x["attention"] for x in result["items"]} <= {"高", "中", "低", "域外"}
+        assert not any(x["section"] == "参考区" for x in result["items"])
+        stats = result["stats"]
+        assert stats["refZone"] == 0 and stats["manual"] == 0
+        assert all(x["attention"] == x["scoreBand"] for x in result["items"]
+                   if x["domainDisp"] != "域外"), "入域记录缺三档"
+        assert stats["high"] + stats["medium"] + stats["low"] + stats["outOfScope"] == 12
 
         # v1.07 #1：AI 模型发布（题名锚定 T09，不因正文发布会词误入 T24）
         ai = _find(result, "第一个用物理做计算原语")
@@ -171,17 +183,20 @@ def test_engine_smoke():
         assert ai["attention"] == "中" and ai["scoreBand"] == "中"  # S-P04 一般技术类地板
         assert ai["section"] == "主榜" and ai["priorityTier"] == "P0"
 
-        # v1.07 #2：T02 报告与 T23 深度分析 → 参考区（不分高中低，底层档位保留）
+        # v1.11 直评：T02 报告不再入参考区，直接 S-R01 粗分档（方法＋样本＋连续性＋E1 → 高 75–89）
         rep = _find(result, "中电联发布")
-        ana = _find(result, "深度解读")
-        for x in (rep, ana):
-            assert x["section"] == "参考区"
-            assert x["scoreBand"] == "参考" and x["attention"] == "参考" and not x["priorityTier"]
-            assert x["bandUnderlying"] in ("高", "中", "低")
-        assert result["stats"]["refZone"] == 4  # T02 报告 + T23 深度分析 + B1 改判 + C-T16 假文献改判
+        assert rep["typeId"] == "T02", rep["type"]
+        assert rep["attention"] == "高" and rep["scoreBand"] == "高"
+        assert rep["scoreStatus"] == "区间评分" and rep["valueDisplay"] == "75–89"
+        assert rep["value"] is None  # 粗分档不伪造精确点分
+        assert rep["section"] == "主榜"
+
+        # v1.11 直评：T23 深度分析不再入参考区，按软信息上限直接 低
+        ana = _find(result, "深度解读：新型储能电价机制")
+        assert ana["typeId"] == "T23", ana["type"]
+        assert ana["attention"] == "低" and ana["scoreBand"] == "低"
 
         # v1.08 W1：未来态里程碑（预计10月转入商业运营）→ S-A05 硬上限低·P2
-        # （S8 已为低时走"上限确认"审计痕并后置 P2，与 S10-D 同惯例）
         fut = _find(result, "乐山100MW/400MWh")
         assert fut["scoreBand"] == "低" and fut["attention"] == "低", fut["scoreBand"]
         assert fut["priorityTier"] == "P2"
@@ -193,55 +208,59 @@ def test_engine_smoke():
         assert rou["priorityTier"] == "P2"
         assert any("S-A04" in str(a) for a in (rou["gateActions"] + [str(r) for r in rou["scoreAudit"]]))
 
-        # v1.08 B1：十五五媒体投资解读稿（无政策本体锚点×定调/投资方向/总投资将超）
-        # → T19 改判 T23 深度分析，入参考区
+        # v1.08 B1 + v1.11：十五五媒体投资解读稿 → T19 改判 T23 → 直接按机制出档（低）
         pi = _find(result, "“十五五”能源规划定调")
         assert pi["typeId"] == "T23", pi["type"]
         assert "媒体解读改判" in pi["typeRule"]
-        assert pi["section"] == "参考区" and pi["scoreBand"] == "参考"
+        assert pi["attention"] == "低" and pi["section"] == "主榜"
 
         # v1.09 S-F01 窄修：T12 合作稿正文 boilerplate『全球首个+认证』不得借首证地板抬档
-        # （首证地板限技术事件类 T06–T10；战略合作稿封顶54→低，v1.01 口径恢复）
         coop = _find(result, "某钙钛矿企业与地方研究院")
         assert coop["typeId"] == "T12", coop["type"]
         assert coop["scoreBand"] == "低" and coop["attention"] == "低", coop["scoreBand"]
         assert not any("S-F01" in str(g) for g in coop["gateActions"] if "地板" in str(g))
 
-        # 文献载体 → T01（本例非正刊非瓶颈 → v1.06 统一中档，留主榜）
+        # 文献载体 → T01（本例非正刊非瓶颈 → v1.06 统一中档）
         paper = _find(result, "Sulfide solid")
-        assert paper["typeId"] == "T01" and paper["section"] == "主榜"
+        assert paper["typeId"] == "T01" and paper["attention"] == "中"
 
-        # v1.10 C-T16 假文献：题名『深度解读』媒体框架×正文 DOI 引用 → 不是文献本体，
-        # 改判 T23 深度分析（typeRule=C-G05/C-T16-DOI载体前提），入参考区
+        # v1.10 C-T16 假文献：题名『深度解读』媒体框架×正文 DOI 引用 → T23；
+        # 正文『研究团队』构成科研转载载体证据 → S-P06 科研转载地板=中（科研转载不放低）
         fake = _find(result, "深度解读：固态电解质")
         assert fake["typeId"] == "T23", fake["type"]
         assert "C-T16" in fake["typeRule"], fake["typeRule"]
-        assert fake["section"] == "参考区" and fake["scoreBand"] == "参考"
+        assert fake["attention"] == "中" and fake["scoreBand"] == "中"
+        assert any("S-P06" in str(a) for a in (fake["gateActions"] + [str(r) for r in fake["scoreAudit"]]))
 
-        # v1.10 C-T16 rescue：《刊名》文章全文转载＋『引用本文』DOI → 论文本体 T01，
-        # 展示大类=论文（reprint 豁免：不走媒体源→新闻/评论/观点分支）
+        # v1.10 C-T16 rescue：《刊名》文章全文转载＋『引用本文』DOI → 论文本体 T01
         reprint = _find(result, "《储能科学与技术》文章")
         assert reprint["typeId"] == "T01", reprint["type"]
-        assert reprint["section"] == "主榜"
+        assert reprint["attention"] == "中"
         assert reprint["displayCategory"] == "论文" and reprint["displaySubcategory"] == "研究型"
 
-        # 域外 + 范围忽略
-        assert _find(result, "某明星官宣新剧")["domainDisp"] == "域外"
-        assert _find(result, "宁德时代发布")["ignored"] is True
+        # 域外不评分；范围忽略（CATL）仅审计字段，不再构成 忽略 类目
+        out_rec = _find(result, "某明星官宣新剧")
+        catl = _find(result, "宁德时代发布")
+        for x in (out_rec, catl):
+            assert x["domainDisp"] == "域外" and x["attention"] == "域外"
+            assert x["scoreBand"] == "未评分" and x["value"] is None
+        assert catl["ignored"] is True  # 审计留痕：范围忽略不再拦截评分/输出
 
-        # v1.09 展示链路（纯展示标注，不影响评分）：论文/新闻两级 + 归入大类 A/B/C/D；
-        # 论文四分型逐条判定（题名综述词→综述；评估/情景词→分析类；媒体源→新闻/评论/观点；默认研究型）
+        # v1.09 展示链路（纯展示标注，不影响评分）：论文/新闻两级 + 归入大类 A/B/C/D
         assert paper["displayCategory"] == "论文" and paper["displaySubcategory"] == "研究型" \
             and paper["displayClass"] == "A"
         assert fut["displayCategory"] == "新闻" and fut["displaySubcategory"] == "工程与产业化" \
             and fut["displayClass"] == "B(链2-5)"
-        assert pi["displaySubcategory"].startswith("观点与交流") and pi["displayClass"] == "A"
-        assert _find(result, "某明星官宣新剧")["displayCategory"] == "—"  # 域外 → 展示标域外
+        assert out_rec["displayCategory"] == "—"  # 域外 → 展示标域外
         assert sum(result["stats"]["displayChain"].values()) == result["stats"]["records"]
 
-    print("triage_engine smoke OK：v1.07+v1.08+v1.09+v1.10 机制（T09 题名锚定 / 参考区 / S-A05 未来态 / "
-          "S-A04 汇总稿 / B1 媒体解读改判 / C-T16 载体前提（假文献→T23·全文转载→T01） / "
-          "T01 主榜 / 域外 / 范围忽略 / 展示链路）全部落位")
+        # 档位分布闭合：高 1（T02 报告）/ 中 4（T09·T01×2·C-T16 假文献 S-P10）/ 低 5 / 域外 2
+        assert (stats["high"], stats["medium"], stats["low"], stats["outOfScope"]) == (1, 4, 5, 2)
+
+    print("triage_engine smoke OK：v1.07+v1.08+v1.09+v1.10+v1.11 机制（T09 题名锚定 / "
+          "S-A05 未来态 / S-A04 汇总稿 / B1 媒体解读改判 / C-T16 载体前提（假文献→T23·全文转载→T01） / "
+          "直评口径（12 条全留主输出：T02 S-R01 高 / T23 直接低 / 域外不评分·ignored 仅审计） / "
+          "T01 中档 / 展示链路）全部落位")
 
 
 if __name__ == "__main__":

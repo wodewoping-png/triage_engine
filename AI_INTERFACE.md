@@ -1,4 +1,4 @@
-# AI_INTERFACE —— triage_engine 机器调用契约（v1.10）
+# AI_INTERFACE —— triage_engine 机器调用契约（v1.11）
 
 本文档面向**AI 程序/Agent/服务端调用方**：给出能力边界、端到端流程、输入/输出 JSON Schema、
 字段字典与全部评价机制表（未删减）。人类可读入门见 [README.md](README.md)。
@@ -13,7 +13,7 @@ LLM 语义准绳的编辑源）。运行层不读 docx/xlsx：docx 的依次分�
 ## 1. 能力一句话
 
 输入三库行记录（新闻爬虫/微信公众号/文献 RSS），输出每条记录的：**技术领域判定 + 新闻类型判定 +
-新闻价值评分（S1–S8）+ 优先级层（S9）+ 档位政策结果（S10）+ 展示分区（主榜/参考区）+
+新闻价值评分（S1–S8）+ 优先级层（S9）+ 档位政策结果（S10）+ 直评口径（v1.11：入域直接 高/中/低，域外不评分）+
 事件级去重合并**，并生成 JSON/CSV/域外分析/HTML 看板四件套。规则层纯标准库、确定性、可离线。
 
 ## 2. 端到端流程
@@ -30,15 +30,16 @@ rows[]（行记录）
   │  [可选] ③ LLM 语义判定合并（run_llm 产出 decisions，覆盖域/类型，规则层留痕）
   ▼
 B1 媒体投资解读改判（v1.08，评分前）：T19 × 规划话题 × 解读框架（出炉/定调/释放信号/投资方向）
-  × 无政策本体锚点（《》文件名×发布/印发族 或 国家级主体词）→ 改判 T23（随参考区分区）
+  × 无政策本体锚点（《》文件名×发布/印发族 或 国家级主体词）→ 改判 T23（直接按机制出档）
   │  ④ 评分轨
 评分卡维度评分（S4 Σ，类型专属卡/专项通道）
 TRL 加权（S5，仅 TRL 加权卡） → Gate 封顶（S6） → 记录合成（S7） → 档位（S8：≥75高 ≥55中 <55低）
 S9 优先级分层（U_type 档位上限 + P0/P1/P2 排序层）
 S10 档位政策（地板/硬上限/上限/论文统一档位）——只改档位与层，不改分数（S-V02 信源分除外）
   ▼
-参考区分区（v1.07）：eligible 且 T02/T23 → section=参考区，attention/档位=参考，层清空，
-                     底层档位存 bandUnderlying（评分机制与审计链原样保留）
+直评口径（v1.11）：不设 参考/待定/忽略 类目——入域（domainDisp≠域外）attention=scoreBand=高/中/低
+                    （T02 走 S-R01 粗分档、T25 经通用技术卡兜底、范围忽略 ignored 仅审计字段）；
+                    域外不评分（scoreBand=未评分、attention=域外）。v1.07 参考区分区停用（section 恒主榜）。
                      → 【v1.09 展示链路】按最终类型映射 展示大类（论文/新闻）/展示小类/归入大类（A/B/C/D）三字段（纯展示，不进评分）
   │  ⑤ 事件级去重（union-find）：C-R01 DOI / C-R03 文号名·题名相似
   ▼
@@ -76,16 +77,17 @@ S10 档位政策（地板/硬上限/上限/论文统一档位）——只改档�
 
 ```json
 {
-  "method": "…+paper-band-v106b+ref-zone-v107+future-roundup-retype-v108+display-chain-v109",
+  "method": "…+doi-carrier-premise-v110+direct-banding-v111",
   "stats": { "raw", "records", "duplicates", "eventMerged", "mainDomain", "semanticOnly",
-             "outOfScope", "typePending", "high", "medium", "low", "refZone", "unscored",
-             "p0", "p1", "p2", "s10Floored", "s10Capped", "sourceHinted", "llmJudged", ... },
+             "outOfScope", "typePending", "high", "medium", "low", "refZone", "manual", "unscored",
+             "p0", "p1", "p2", "s10Floored", "s10Capped", "bandCapped", "sourceHinted", "llmJudged",
+             "displayChain", "paperSubtypes", ... },
   "outsideSummary": { "total", "reasons[]", "types[]", "topics[]", "sources[]" },
   "items": [ /* 字段字典见 §4.2 */ ]
 }
 ```
 
-注意：`high/medium/low` 为**主榜口径**（参考区条目不计入三档，单独计 `refZone`）。
+注意：v1.11 直评口径——`high/medium/low` 覆盖**全部入域记录**（无 参考/待定/忽略 类目；`refZone`/`manual` 恒 0 保留为审计位）；`high+medium+low+outOfScope == records` 闭合。
 
 ### 4.2 item 字段字典（全量）
 
@@ -101,17 +103,17 @@ S10 档位政策（地板/硬上限/上限/论文统一档位）——只改档�
 | `type` / `typeId` | 类型标签（`T01`–`T25`，见 §5.2） |
 | `typeRule` / `typeReason` / `typeEvidence` / `typeAlternatives[]` / `typeConfidence` | 类型裁决链 |
 | `family` / `card` / `cardName` | 类型族 / 所用评分卡 |
-| `priorityTier` | S9 排序层：`P0`/`P1`/`P2`（参考区为空串） |
-| `section` | **v1.07 分区**：`主榜` / `参考区`（T02/T23 eligible） |
-| `bandUnderlying` | **v1.07**：参考区条目的底层档位（高/中/低，S10 执行结果留档） |
+| `priorityTier` | S9 排序层：`P0`/`P1`/`P2`（域外为空串） |
+| `section` | **v1.11 恒 `主榜`**（v1.07 参考区分区停用，字段保留兼容 schema） |
+| `bandUnderlying` | **v1.11**：恒等于 `scoreBand`（v1.07 参考区底层档语义停用，字段保留兼容 schema） |
 | `displayCategory` | **v1.09**：展示大类——论文（T01）/新闻（T02–T24）/待定（T25）；域外记录为 `—` | 
 | `displaySubcategory` | **v1.09**：展示小类——论文=四分型**逐条判定**（综述/研究型/分析类/新闻·评论·观点；题名综述词→综述，评估/情景/技术经济词→分析类，非文献源（媒体解读/转载报道，全文转载特征除外）→新闻·评论·观点，默认研究型）；新闻=知识资产/工程与产业化/企业经营合作与资本/资源市场与产业链/政策法规与标准/人才与组织动态/观点与交流；域外=`域外` |
 | `displayClass` | **v1.09**：归入大类 A科研知识/B产业化主链(链2-5)/C企业支撑/D外部环境（依据《新闻类型展示分类.xlsx》与 02 机制表《大类与产业链导航》）；纯展示不影响 S1–S10 |
 | `llmJudged` | 是否被 LLM 语义判定覆盖 |
 | `value` / `valueDisplay` | S8 分值（T02 报告为区间串如 `35–54`，value=null） |
-| `attention` | 关注等级：`高`/`中`/`低`/`参考`/`域外`/`待定`/`忽略` |
-| `scoreBand` | 档位：`高`/`中`/`低`/`参考`/`未评分` |
-| `scoreStatus` | `已评分`/`区间评分`/`未进入评分` |
+| `attention` | **v1.11 直评**：`高`/`中`/`低`（入域）或 `域外`（未入域，不评分） |
+| `scoreBand` | 档位：`高`/`中`/`低`（入域）或 `未评分`（域外） |
+| `scoreStatus` | `已评分`/`区间评分`（T02 粗分档）/`未进入评分`（仅域外） |
 | `scoreRaw` / `scoreAfterGate` / `cap` / `weight` | S4 原始Σ / S6 后 / 封顶值 / TRL 权重 |
 | `dimensions[]` | 评分卡维度明细 `[名称, 得分, 满分, 注记]` |
 | `route` / `routeTrlBand` / `routeTrlBasis` / `trl` | S3 技术路线与 TRL 带 |
@@ -119,7 +121,7 @@ S10 档位政策（地板/硬上限/上限/论文统一档位）——只改档�
 | `gateActions[]` | 全部 Gate/政策动作留痕（U_type/S10 地板上限/S-V02/S-G0x/C-R03…） |
 | `missingEvidence[]` | 缺失证据清单 |
 | `scoreAudit[]` | S1–S8+S9+S10+C-R03 审计链 `[步骤, 名称, 说明]` |
-| `ignored` / `ignoredReason` | 范围免评（宁德时代主体规则） |
+| `ignored` / `ignoredReason` | 范围免评审计位（宁德时代主体规则等；v1.11 起仅留痕，不再拦截评分与输出） |
 | `bodyPrep` / `contentQuality` | 预处理审计 / 正文质量 |
 | `outsideReason` / `outsideReasonDetail` / `outsideTopic` | 域外结构化原因（O1–O9）与主题 |
 | `mergedRefs[]` | 事件级并入记录 provenance（title/src/meta/url/date/band/value） |
@@ -165,11 +167,11 @@ T20 标准认证 ｜ T21 人才与组织 ｜ T22 观点访谈 ｜ T23 深度分�
 专项通道：**T12 合作**（普通合作封顶54）、**T21 招聘**（普通招聘封顶54）、**T09 技术投入品**（具名材料产品四维）、
 **T02 报告 S-R01**（方法×样本×连续性×信源 → 高75–89/中55–74/低35–54 区间，不伪造精确点分）。
 
-### 5.4 S9 优先级分层 + S10 档位政策（v1.04 + v1.06 + v1.07）
+### 5.4 S9 优先级分层 + S10 档位政策（v1.04 + v1.06；v1.07 参考区 v1.11 起停用）
 
 S9：`最终档位 = min(S8 档位, U_type)`；U_type：T11/T13/T14/T24 → 中。排序层 P0 技术优先 / P1 产业制度 / P2 软信息后置。
 
-S10（顺序：硬上限 → 地板 → 常规上限 → 论文统一档位 → 参考区；v1.08 新增 S-A04/S-A05 硬上限与 B1 类型改判）：
+S10（顺序：硬上限 → 地板 → 常规上限 → 论文统一档位；v1.08 新增 S-A04/S-A05 硬上限与 B1 类型改判；v1.07 参考区分区 v1.11 起停用）：
 
 | 类别 | 规则 | 触发条件（摘要） | 结果 |
 |---|---|---|---|
@@ -194,10 +196,10 @@ S10（顺序：硬上限 → 地板 → 常规上限 → 论文统一档位 → 
 | 上限 | S10-B 软信息 | 投融资/并购/市场/会议/宣传/观点/招聘无技术瓶颈载荷 | 低 |
 | 上限 | S10-C 常规动态 | 无技术细节建厂/招标/立项/资源法规常规；高TRL(≥9)常规运行无跃迁 | 低 |
 | 论文 | S-P01v2/S-P09/S-P10 | paper_class=T01 或 T22/T23×科研转载：正刊→高；题名突破词×量化参数→最低中；**其余统一中** | 中（默认） |
-| 类型改判 | **B1 媒体投资解读（v1.08）** | T19 × 规划话题 × 解读框架（出炉/定调/释放信号/投资方向/总投资将超/探析 v1.09 补词）× 无政策本体锚点 → 改判 T23（typeRule=C-T08/T19-媒体解读改判（B1），审计留痕） | 入参考区 |
-| 前提 | **C-T16 载体前提（v1.10，DOI×语义共决）** | 前提① `src=literature` 一律 T01；前提② wechat/news 的 DOI（字段/链接/正文）只是引用线索——**有 DOI ≠ 论文**：论文本体载体（《刊名》文章/全文转载/学术速递/网络首发/引用本文）或题名期刊锚定＋学术命题才可 T01（正文级 DOI 不再单独构成载体）；DOI 迹象×题名媒体分析/报道框架（解读/评述/盘点/梳理/综述：/科普/评论/观点/Top N/据报道/科学家发现/Scientists discover/study shows 等）×学术命题×非本体载体 → 改判 T23（typeRule=`C-G05/C-T16-DOI载体前提`，DOI 记入证据链）；证据级 E1 收窄为 literature 源，wechat/news 带 DOI → E2『报道引用论文 DOI（二手可溯源）』 | T01 收紧 / 假文献→T23 参考区 |
-| 展示 | **参考区（v1.07）** | eligible 且 T02/T23 → 分区=参考区、档位/关注=参考、层清空；`bandUnderlying` 留底层档位；评分与审计链不动 | 参考区 |
-| 展示 | **展示链路（v1.09）** | 按最终类型映射 `DISPLAY_CHAIN_MAP`：T01→论文·四分型**逐条判定**（综述/研究型/分析类/新闻·评论·观点，`_paper_display_subtype` 题名证据级联）·A；T02–T06→新闻·知识资产·A（T05 计分走 B链3）；T07–T10→工程与产业化·B(链2-5)；T11–T14→企业经营合作资本·C；T15–T18→资源市场产业链·C/D/B链6；T19/T20→政策法规标准·D；T21→人才组织·C；T22–T24→观点与交流·A；T25→待定；域外→`—/域外/—`。stats 增 `displayChain`＋`paperSubtypes` 计数。**不参与任何评分/档位/优先级**（用户 2026-09-24 口径） | 主榜/参考区不变 |
+| 类型改判 | **B1 媒体投资解读（v1.08）** | T19 × 规划话题 × 解读框架（出炉/定调/释放信号/投资方向/总投资将超/探析 v1.09 补词）× 无政策本体锚点 → 改判 T23（typeRule=C-T08/T19-媒体解读改判（B1），审计留痕） | T23 直接按机制出档 |
+| 前提 | **C-T16 载体前提（v1.10，DOI×语义共决）** | 前提① `src=literature` 一律 T01；前提② wechat/news 的 DOI（字段/链接/正文）只是引用线索——**有 DOI ≠ 论文**：论文本体载体（《刊名》文章/全文转载/学术速递/网络首发/引用本文）或题名期刊锚定＋学术命题才可 T01（正文级 DOI 不再单独构成载体）；DOI 迹象×题名媒体分析/报道框架（解读/评述/盘点/梳理/综述：/科普/评论/观点/Top N/据报道/科学家发现/Scientists discover/study shows 等）×学术命题×非本体载体 → 改判 T23（typeRule=`C-G05/C-T16-DOI载体前提`，DOI 记入证据链）；证据级 E1 收窄为 literature 源，wechat/news 带 DOI → E2『报道引用论文 DOI（二手可溯源）』 | T01 收紧 / 假文献→T23 直评三档 |
+| 输出 | **直评口径（v1.11）** | 不设 参考/待定/忽略 类目：入域记录 attention=scoreBand=高/中/低（T02 走 S-R01 粗分档：scoreStatus=区间评分、value=null、valueDisplay=区间串；T25 经通用技术知识卡 card_tech 兜底三档；范围忽略 `ignored`/`ignoredReason` 降为审计字段不再拦截）；域外不评分（scoreBand=未评分、attention=域外）；v1.07 参考区分区停用（section 恒主榜、bandUnderlying=scoreBand） | 主输出即全集，恒四件套 |
+| 展示 | **展示链路（v1.09）** | 按最终类型映射 `DISPLAY_CHAIN_MAP`：T01→论文·四分型**逐条判定**（综述/研究型/分析类/新闻·评论·观点，`_paper_display_subtype` 题名证据级联）·A；T02–T06→新闻·知识资产·A（T05 计分走 B链3）；T07–T10→工程与产业化·B(链2-5)；T11–T14→企业经营合作资本·C；T15–T18→资源市场产业链·C/D/B链6；T19/T20→政策法规标准·D；T21→人才组织·C；T22–T24→观点与交流·A；T25→待定；域外→`—/域外/—`。stats 增 `displayChain`＋`paperSubtypes` 计数。**不参与任何评分/档位/优先级**（用户 2026-09-24 口径） | 主榜（v1.11 恒主榜） |
 
 ### 5.5 LLM 语义判定层（可选第三轨）
 
@@ -213,12 +215,12 @@ S10（顺序：硬上限 → 地板 → 常规上限 → 论文统一档位 → 
 
 | 通道 | 匹配键 | 守卫 |
 |---|---|---|
-| C-R01 论文 | 标准化 DOI 精确匹配（跨源） | T01、非域外/忽略 |
+| C-R01 论文 | 标准化 DOI 精确匹配（跨源） | T01、非域外 |
 | C-R03 新闻·文号名 | 题名《》文号/文件名（规范后 ≥8 字符；排除『《刊名》+文章/独家/目录』载体模式） | 日期窗 ≤2 天；**不要求同域** |
 | C-R03 新闻·题名相似 | 规范化题名 bigram Jaccard ≥0.75 | 同域＋日期窗 ≤2 天；系列文（上）/（下）分节标记不同不并簇 |
 
 主记录 = 正文质量(full>abstract>preview>digest) → 证据层级(E1>E2>E3) → 正文最长 → 更早发布；
-并入记录进 `mergedRefs`，评分只保留主记录一次。域外/忽略/T25 不参与。
+并入记录进 `mergedRefs`，评分只保留主记录一次。域外/T25（域外侧）不参与；v1.11 起范围忽略仅审计、不再影响参与。
 
 ### 5.7 常数草案（null 待回测惯例）
 
@@ -236,8 +238,10 @@ S10（顺序：硬上限 → 地板 → 常规上限 → 论文统一档位 → 
 
 - 入参校验：`rows` 非空、每条 dict、`src/date/title` 非空、`src` ∈ 三源；违规抛 `ValueError`（信息含行号）。
 - 模块名占用：宿主进程已 import 其他路径的同名管线模块 → `RuntimeError`（解决：子进程运行引擎）。
-- 结构断言（validate，内建）：记录数一致、裁决字段齐全、域外三段原因、参考区一致性（⊆T02/T23、
-  档位=参考、无优先级层、底层档位 ∈ 高/中/低、计数一致）、四件套落盘非空。断言失败=输出损坏，不应消费。
+- 结构断言（validate，内建）：记录数一致、裁决字段齐全、域外三段原因、
+  **v1.11 直评契约**（attention ∈ {高,中,低,域外}；入域 attention==scoreBand ∈ {高,中,低}；
+  域外 value 空且 attention=域外；high+medium+low+outOfScope==records；refZone==manual==0）、
+  四件套落盘非空。断言失败=输出损坏，不应消费。
 - 幂等：`run()` 每次全量重算并覆盖 out_dir 四件套；`llm` 层凭 audit JSONL 断点续跑。
 - 确定性：规则层无随机源；LLM 层 temperature=0 但仍建议以 audit/decisions 文件为准做缓存。
 - 性能量级：单进程约 2–3k 行/分钟（规则层）；LLM 层 `--batch 16 --sleep 6` 约 500 条/40 分钟（视限流）。
@@ -246,7 +250,7 @@ S10（顺序：硬上限 → 地板 → 常规上限 → 论文统一档位 → 
 
 完整修订流水线（改哪、怎么验证、怎么同步、怎么发布）见 [MAINTENANCE.md](MAINTENANCE.md)；本节为要点。
 
-- 版本号在 `triage_engine.__version__` / `ENGINE_VERSION`；输出 JSON `method` 串尾部为机制标签（当前 `future-roundup-retype-v108`）。
+- 版本号在 `triage_engine.__version__` / `ENGINE_VERSION`；输出 JSON `method` 串尾部为机制标签（当前 `direct-banding-v111`）。
 - 升级机制时：更新 `pipeline/` + `rules/` 快照、`ENGINE_VERSION`、README/AI_INTERFACE 版本表，
   并同步 `docs/` 下的机制表快照（02 评分框架表用开发仓 patch_workbooks 系列脚本增补后拷贝）
   与 `docs/requirements_ledger.txt`（与开发仓 `问题.txt` 同步）。

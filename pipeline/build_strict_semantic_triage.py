@@ -29,6 +29,10 @@ from score_data import PRIORITY_TIERS, BAND_POLICY_V103, BAND_POLICY_V104
 TYPE_BY_ID = {t["id"]: t for t in TYPES}
 # 资源体系沿用市场/供需变化卡，确保 T15 直接完成评分。
 base.CARD_OF_TYPE["T15"] = "card_market"
+# 2026-09-25 v1.11（用户口径修订）：不设"待定"类目——入域的 T25 记录经通用技术知识卡
+# 兜底评分（base.score_card 的 CARD_OF_TYPE[T25] 原为 None，CARDS[None] 会 KeyError）；
+# 类型仍记 T25（审计留痕），关注等级直接输出三档。
+base.CARD_OF_TYPE["T25"] = "card_tech"
 DOM_BY_ID = {d["id"]: d for d in base.DOMS}
 DOM_BY_NO = {d["no"]: d for d in base.DOMS}
 
@@ -1970,7 +1974,8 @@ def _merge_rank(x):
 def _dedup_events(items):
     """事件级去重（分类评分完成后、写盘前）：返回 (去重后列表, 并入条数)。
 
-    候选排除：域外 / 范围忽略 / T25 待定（这些记录不参与合并，也不被并入）。
+    候选排除：域外 / T25（信息不足型不参与合并，也不被并入）；
+    v1.11 起范围忽略记录正常参与合并（ignored 仅审计，不拦截任何输出）。
     并入记录保留 provenance 到主记录 mergedRefs，评分只保留主记录一次。
     """
     n = len(items)
@@ -1997,7 +2002,7 @@ def _dedup_events(items):
     # C-R01 论文：标准化 DOI 精确匹配（跨源；读取层完全同题去重已先行）
     by_doi = {}
     for i, x in enumerate(items):
-        if x["typeId"] != "T01" or x.get("ignored") or x["domainDisp"] == "域外":
+        if x["typeId"] != "T01" or x["domainDisp"] == "域外":
             continue
         nd = _norm_doi(x.get("doi"))
         if not nd:
@@ -2009,7 +2014,7 @@ def _dedup_events(items):
     # C-R03 新闻：《》文号/文件名匹配（日期窗内；不要求同域——文号即事件身份，
     # 同文号异域属分类不一致，合并后保留主记录判定）
     news_idx = [i for i, x in enumerate(items)
-                if x["src"] in ("news-spider", "wechat") and not x.get("ignored")
+                if x["src"] in ("news-spider", "wechat")
                 and x["domainDisp"] != "域外" and x["typeId"] != "T25"]
     doc_map = {}
     for i in news_idx:
@@ -2111,9 +2116,11 @@ def build():
         outside_reason, outside_detail, outside_topic = ("", "", "")
         if dom["disp"] == "域外":
             outside_reason, outside_detail, outside_topic = _outside_analysis(item, typ)
+        # 2026-09-25 v1.11（用户口径修订）：不设 参考/待定/忽略 类目——
+        # 入域记录一律直接按机制给出 高/中/低（T25 经通用技术卡兜底）；域外不评分。
+        # 范围忽略（ignored）降为纯审计字段，不再拦截评分，也不构成 attention 状态。
         ignored = base.catl_scope_ignore_reason(item)
-        incomplete = typ["rule"].startswith("C-G01") and typ["tid"] == "T25"
-        eligible = bool(dom["primary"]) and dom["disp"] != "域外" and typ["tid"] != "T25" and not ignored and not incomplete
+        eligible = bool(dom["primary"]) and dom["disp"] != "域外"
         generic_domain = dom["disp"] in ("主域(语义域)", "主域(扩展)") or bool(dom.get("llm"))
         score = {"value": None, "valueDisplay": "—", "raw": None, "gated": None, "band": "未评分",
                  "dimensions": [], "trlInfo": None, "weight": None, "cap": None,
@@ -2139,16 +2146,10 @@ def build():
                 ["S2", "类型改判·B1（v1.08）",
                  "T19→T23 深度分析：规划话题×媒体解读框架且无《》/发布·印发/国家级主体锚点——"
                  "媒体主观理解入参考区；国家政策明确说了的（政策发布本体）仍走 T19 主榜高"]]
-        if ignored:
-            attention = "忽略"
-        elif dom["disp"] == "域外":
+        # v1.11：attention 只剩 高/中/低/域外——入域直接取机制档位（含 T02 S-R01 粗分档、
+        # T25 通用卡兜底）；域外＝没进域，不评分。
+        if dom["disp"] == "域外":
             attention = "域外"
-        elif incomplete or typ["tid"] == "T25":
-            attention = "待定"
-        elif score["scoreStatus"] == "区间评分":
-            attention = score["band"]
-        elif score["value"] is None:
-            attention = "待定"
         else:
             attention = score["band"]
         # ---- v1.02 优先级分层（U_type 档位上限）+ v1.03 S10 档位政策（地板/上限）+ P0/P1/P2 排序层 ----
@@ -2174,15 +2175,10 @@ def build():
                 attention = s10_band
             if eligible:
                 priority_tier = _priority_tier(item, dom, typ, score, tier_override=s10_tier)
-        # 2026-09-23 v1.07（#2）：参考区——T02 研究报告（IEA/DOE 等机构报告）与 T23 深度分析
-        # 与评论单独分区展示，不与常规新闻/文献/政策标准同榜，评分仅作参考不分高中低档。
-        # 评分机制与 S10 审计链原样保留（bandUnderlying 存底层档位）；T01 论文仍在主榜中档。
+        # 2026-09-25 v1.11（用户口径修订）：v1.07 参考区分区停用——不设"参考"类目，
+        # T02 研究报告/T23 深度分析入域后直接输出机制真实档位（S-R01 粗分档/S10 政策照常）。
+        # section/bandUnderlying 字段保留（恒 主榜/同档位），S1–S10 评分与审计链不变。
         section, band_underlying = "主榜", score.get("band")
-        if eligible and typ["tid"] in {"T02", "T23"}:
-            section = "参考区"
-            attention = "参考"
-            score["band"] = "参考"
-            priority_tier = ""
         trl_info = score.get("trlInfo") or {}
         # v1.09 展示链路：纯展示标注（域外记录标“域外”），在评分/档位/分区全部落定后追加，不影响任何判定。
         # 论文（T01）四分型逐条判定（用户 2026-09-24 口径：综述/研究型/分析类/新闻·评论·观点）。
@@ -2224,8 +2220,13 @@ def build():
                             x["attention"], x["title"]))
     # v1.05 事件级去重（C-R01/C-R03 末端模块）：论文 DOI、新闻文号名/题名相似
     out, event_merged = _dedup_events(out)
+    # 2026-09-25 v1.11（用户口径修订）：不设 参考/待定/忽略 类目——
+    # 入域记录直接按机制输出 高/中/低（T02 走 S-R01 报告粗分档、T25 经通用技术卡兜底、
+    # 范围忽略不再拦截评分）；域外不评分。主输出即全集，无过滤、无第五件套存档。
+    # typePending/refZone/manual 保留为审计计数（后两者恒 0，供历史契约核对）。
     stats = {
-        "raw": raw_n, "records": len(out), "duplicates": sum(x["duplicates"] for x in out),
+        "raw": raw_n, "records": len(out),
+        "duplicates": sum(x["duplicates"] for x in out),
         "eventMerged": event_merged,
         "mainDomain": sum(x["domainDisp"] in ("主域", "主域(草案)", "主域(语义域)", "主域(扩展)") for x in out),
         "semanticOnly": sum(x["domainDisp"] in ("主域(语义域)", "主域(扩展)") for x in out),
@@ -2264,6 +2265,7 @@ def build():
     }
     write_outputs(out, stats, outside_summary)
     validate(out, stats, outside_summary)
+    print(f"[direct-banding] v1.11 不设 参考/待定/忽略 类目：入域 {len(out) - len(outside)} 条直接三档，域外 {len(outside)} 条不评分")
     print(json.dumps(stats, ensure_ascii=False))
 
 
@@ -2273,35 +2275,41 @@ def write_outputs(items, stats, outside_summary):
     outside_csv_path = os.path.join(HERE, "域外内容分析_20260615-23.csv")
     html_path = os.path.join(HERE, "三库严格语义分类看板_20260615-23.html")
     with open(json_path, "w", encoding="utf-8") as f:
-        json.dump({"method": "semantic-llm-calibrated-v5+three-band-scoring-v1.04+priority-tiers+s10-band-policy-v104+llm-merge+event-dedup-v105+paper-band-v106b+ref-zone-v107+future-roundup-retype-v108+display-chain-v109+doi-carrier-premise-v110",
+        json.dump({"method": "semantic-llm-calibrated-v5+three-band-scoring-v1.04+priority-tiers+s10-band-policy-v104+llm-merge+event-dedup-v105+paper-band-v106b+ref-zone-v107+future-roundup-retype-v108+display-chain-v109+doi-carrier-premise-v110+direct-banding-v111",
                    "stats": stats,
                    "outsideSummary": outside_summary, "items": items}, f, ensure_ascii=False)
+    # v1.11（输出清理）：主 CSV 与移出记录 CSV 共用同一列 schema；移出件前置“移出原因”列，审计链完整可回放。
+    header = ["日期", "来源", "来源内信息", "标题", "领域", "领域处置", "领域置信", "领域规则",
+              "领域裁决理由", "领域证据", "次领域", "类型", "类型置信", "类型规则", "类型裁决理由",
+              "类型证据", "其他满足类型", "新闻价值分/区间", "最终档位", "评分状态", "关注等级",
+              "优先级层", "分区", "展示大类", "展示小类", "归入大类", "LLM语义判定", "评分卡",
+              "技术路线", "路线TRL带", "TRL中位数", "权重", "原始分", "Gate后分", "封顶",
+              "证据层级", "Gate动作", "缺失证据", "域外原因分组", "域外具体原因", "域外内容主题",
+              "S1-S8审计", "URL/DOI", "重复数"]
+
+    def row(x):
+        return [x["date"], x["src"], x["meta"], x["title"], x["domain"], x["domainDisp"],
+                x["domainConfidence"], x["domainRule"], x["domainReason"], "、".join(x["domainTerms"]),
+                "、".join(x["secondaryDomains"]), x["type"], x["typeConfidence"], x["typeRule"],
+                x["typeReason"], x["typeEvidence"], "、".join(x["typeAlternatives"]),
+                x["valueDisplay"], x["scoreBand"], x["scoreStatus"], x["attention"],
+                x["priorityTier"], x["section"], x["displayCategory"], x["displaySubcategory"],
+                x["displayClass"], "是" if x["llmJudged"] else "", x["cardName"] or "",
+                x["route"], x["routeTrlBand"], "" if x["trl"] is None else x["trl"],
+                "" if x["weight"] is None else x["weight"],
+                "" if x["scoreRaw"] is None else x["scoreRaw"],
+                "" if x["scoreAfterGate"] is None else x["scoreAfterGate"],
+                "" if x["cap"] is None else x["cap"], x["evidenceLevel"],
+                "；".join(x["gateActions"]), "；".join(x["missingEvidence"]),
+                x["outsideReason"], x["outsideReasonDetail"], x["outsideTopic"],
+                " | ".join(f"{a[0]} {a[1]}：{a[2]}" for a in x["scoreAudit"]),
+                x["url"] or x["doi"], x["duplicates"]]
+
     with open(csv_path, "w", encoding="utf-8-sig", newline="") as f:
         w = csv.writer(f)
-        w.writerow(["日期", "来源", "来源内信息", "标题", "领域", "领域处置", "领域置信", "领域规则",
-                    "领域裁决理由", "领域证据", "次领域", "类型", "类型置信", "类型规则", "类型裁决理由",
-                    "类型证据", "其他满足类型", "新闻价值分/区间", "最终档位", "评分状态", "关注等级",
-                    "优先级层", "分区", "展示大类", "展示小类", "归入大类", "LLM语义判定", "评分卡",
-                    "技术路线", "路线TRL带", "TRL中位数", "权重", "原始分", "Gate后分", "封顶",
-                    "证据层级", "Gate动作", "缺失证据", "域外原因分组", "域外具体原因", "域外内容主题",
-                    "S1-S8审计", "URL/DOI", "重复数"])
+        w.writerow(header)
         for x in items:
-            w.writerow([x["date"], x["src"], x["meta"], x["title"], x["domain"], x["domainDisp"],
-                        x["domainConfidence"], x["domainRule"], x["domainReason"], "、".join(x["domainTerms"]),
-                        "、".join(x["secondaryDomains"]), x["type"], x["typeConfidence"], x["typeRule"],
-                        x["typeReason"], x["typeEvidence"], "、".join(x["typeAlternatives"]),
-                        x["valueDisplay"], x["scoreBand"], x["scoreStatus"], x["attention"],
-                        x["priorityTier"], x["section"], x["displayCategory"], x["displaySubcategory"],
-                        x["displayClass"], "是" if x["llmJudged"] else "", x["cardName"] or "",
-                        x["route"], x["routeTrlBand"], "" if x["trl"] is None else x["trl"],
-                        "" if x["weight"] is None else x["weight"],
-                        "" if x["scoreRaw"] is None else x["scoreRaw"],
-                        "" if x["scoreAfterGate"] is None else x["scoreAfterGate"],
-                        "" if x["cap"] is None else x["cap"], x["evidenceLevel"],
-                        "；".join(x["gateActions"]), "；".join(x["missingEvidence"]),
-                        x["outsideReason"], x["outsideReasonDetail"], x["outsideTopic"],
-                        " | ".join(f"{a[0]} {a[1]}：{a[2]}" for a in x["scoreAudit"]),
-                        x["url"] or x["doi"], x["duplicates"]])
+            w.writerow(row(x))
 
     with open(outside_csv_path, "w", encoding="utf-8-sig", newline="") as f:
         w = csv.writer(f)
@@ -2350,13 +2358,8 @@ h1{font-size:20px;margin:0 0 4px}.sub{color:#888;font-size:12px;margin-bottom:14
   <th data-k="attention">关注</th><th data-k="value">价值</th><th data-k="domain">技术域</th>
   <th data-k="type">新闻类型</th><th data-k="displaySubcategory">展示分类</th><th data-k="outsideReason">域外原因</th>
 </tr></thead><tbody id="tb"></tbody></table></div>
-<h2 id="refh" style="font-size:16px;margin:18px 0 6px;display:none">深度分析与研究报告 · 参考区 <span class="small">T02 研究报告（IEA/DOE 等）/ T23 深度分析与评论 · 不分高中低档，评分仅供参考（底层档位见明细）</span></h2>
-<div class="count" id="refcount" style="display:none"></div>
-<div class="tablebox" id="refbox" style="display:none;max-height:42vh"><table><thead><tr>
-  <th>日期</th><th>来源</th><th>标题</th><th>处置</th><th>参考分</th><th>技术域</th><th>新闻类型</th><th>展示分类</th>
-</tr></thead><tbody id="tbr"></tbody></table></div>
 <div id="detail"></div>
-<details class="method"><summary>分类与评分口径（v1.09：S10 档位政策 + 论文统一档位 + 参考区 + 未来态/汇总稿守卫 + 展示链路）</summary><p>默认域内：除明确域外理由外所有记录给出领域/类型划分；大模型按两份基准 docx（文献技术分类规则、新闻类型语义分类规则）语义裁决，规则层校验兜底。载体形态优先（直播→T24、N部门部署→T19）、主事件锚定（正文杂质不决定主类型）、标题阶段跃迁不落 T23。域外必须说明通读正文后排除过的语义路径及具体原因。</p><p>价值评分执行机制表S1–S8，只输出高、中、低三档；S9 优先级分层：最终档位=min(S8档位, U_type)，排序键=(优先级层P0/P1/P2, -S8分值)。S10 档位政策（v1.03）：重点瓶颈→高；一般技术类→中；投融资、不相干领域、高TRL产业动态（建厂等）、会议、宣传文案、无明确技术细节的建厂/招标/立项→低。地板：瓶颈事实(S-B01)/首创认证(S-F01)/国家重点规划题名(S-P02)/顶刊论文转载(S-P01)→高；聚焦域政策→中。上限：汽车白名单（固态/钠电/新型电池/光伏装车/直接CCUS/车网结合/智驾升阶）未中、生物医药无爆点（克隆/脑机接口/复活等）、非聚焦领域（电池/能源/零碳脱碳/AI/半导体外）、软信息与无技术细节类型→低。S-V02 信源提示分：专业编辑信源（REAI Lab、国际能源小数据等）+5（草案）。分层与档位政策不改写分数本身。</p><p><b>v1.04–v1.06 增量</b>：S10 细化（瓶颈题名锚定、招投标公告低档、首创防护、工程里程碑高地板、地方申报硬上限、市级规划防护、实质技术案例地板）；v1.05 事件级去重 C-R01/C-R03（DOI /《》文号名 / 题名 bigram Jaccard≥0.75；主记录=正文最完整·证据最高·最早发布）；v1.06 论文统一档位——S-P01v2 Nature/Science 正刊（子刊不算）→高、S-P09 题名突破锚定→最低中、S-P10 其余论文/中文转载→统一中档；v1.06b 顶刊载体语境守卫与系列文（上/下）防误并。</p><p><b>v1.07 参考区</b>：T02 研究报告（IEA/DOE 等机构报告）与 T23 深度分析与评论单独分区展示（主表下方"深度分析与研究报告 · 参考区"表），不与常规新闻/文献/政策标准同榜；评分仅作参考、不分高中低档（attention=参考、档位=参考、优先级层清空），底层档位保留在 bandUnderlying 字段与明细页，S1–S8/S10 审计链原样保留。T01 论文仍在主榜（v1.06 统一中档）。</p><p><b>v1.08 未来态/汇总稿/媒体解读</b>：S-A05 未来态计划硬上限——预计/将/拟×（时间）×投运·商业运营·并网 或 将在/将部署 是将来时计划（事件未发生）→ 低，首座×示范在建仍走 S-P05b 中地板；S-F02 里程碑与 S-F01 首证同步不触发；S-A04 常规发电项目汇总稿硬上限——多个/一批×新能源项目×并网/投产族（晶硅光伏/常规风电/水电等成熟技术组合）→ 低，题名点名钙钛矿/量子点/有机/海上漂浮式/单机大容量风机等低TRL新型发电技术除外；S-P02 须政策本体锚点（《》文件名×发布/印发族或国家级主体），十五五类媒体投资解读稿（出炉/定调/释放信号/投资方向）改判 T23 入参考区。</p><p><b>v1.09 展示链路与预置叶冻结</b>：展示分类＝论文（T01 四分型逐条判定：综述／研究型／分析类／新闻·评论·观点）／新闻（知识资产/工程与产业化/企业经营合作与资本/资源市场与产业链/政策法规与标准/人才与组织动态/观点与交流）＋归入大类 A科研知识·B产业化主链(链2-5)·C企业支撑·D外部环境（依据《新闻类型展示分类.xlsx》与 02 机制表《大类与产业链导航》），纯展示标注不影响 S1–S10 评分/档位/优先级；LLM 语义判定层预置叶冻结——除非与零碳产业/AI与智能科技/通用技术完全无关（域外），新闻与文献必须归入预置叶子节点/预置类型，禁止自拟"扩展:"新路径与新增节点（2026-09-24 口径）。</p></details>
+<details class="method"><summary>分类与评分口径（v1.09 机制 + v1.11 直评口径：不设 参考/待定/忽略 类目）</summary><p>默认域内：除明确域外理由外所有记录给出领域/类型划分；大模型按两份基准 docx（文献技术分类规则、新闻类型语义分类规则）语义裁决，规则层校验兜底。载体形态优先（直播→T24、N部门部署→T19）、主事件锚定（正文杂质不决定主类型）、标题阶段跃迁不落 T23。域外必须说明通读正文后排除过的语义路径及具体原因。</p><p>价值评分执行机制表S1–S8，只输出高、中、低三档；S9 优先级分层：最终档位=min(S8档位, U_type)，排序键=(优先级层P0/P1/P2, -S8分值)。S10 档位政策（v1.03）：重点瓶颈→高；一般技术类→中；投融资、不相干领域、高TRL产业动态（建厂等）、会议、宣传文案、无明确技术细节的建厂/招标/立项→低。地板：瓶颈事实(S-B01)/首创认证(S-F01)/国家重点规划题名(S-P02)/顶刊论文转载(S-P01)→高；聚焦域政策→中。上限：汽车白名单（固态/钠电/新型电池/光伏装车/直接CCUS/车网结合/智驾升阶）未中、生物医药无爆点（克隆/脑机接口/复活等）、非聚焦领域（电池/能源/零碳脱碳/AI/半导体外）、软信息与无技术细节类型→低。S-V02 信源提示分：专业编辑信源（REAI Lab、国际能源小数据等）+5（草案）。分层与档位政策不改写分数本身。</p><p><b>v1.04–v1.06 增量</b>：S10 细化（瓶颈题名锚定、招投标公告低档、首创防护、工程里程碑高地板、地方申报硬上限、市级规划防护、实质技术案例地板）；v1.05 事件级去重 C-R01/C-R03（DOI /《》文号名 / 题名 bigram Jaccard≥0.75；主记录=正文最完整·证据最高·最早发布）；v1.06 论文统一档位——S-P01v2 Nature/Science 正刊（子刊不算）→高、S-P09 题名突破锚定→最低中、S-P10 其余论文/中文转载→统一中档；v1.06b 顶刊载体语境守卫与系列文（上/下）防误并。</p><p><b>v1.07 参考区（v1.11 起停用）</b>：T02 研究报告与 T23 深度分析与评论曾单独分区、不分高中低档；2026-09-25 用户口径修订后该分区停用——T02/T23 入域后直接输出机制真实档位（S-R01 报告粗分档 / S10 政策照常），section/bandUnderlying 字段保留（恒 主榜/同档位），S1–S10 审计链不变。</p><p><b>v1.08 未来态/汇总稿/媒体解读</b>：S-A05 未来态计划硬上限——预计/将/拟×（时间）×投运·商业运营·并网 或 将在/将部署 是将来时计划（事件未发生）→ 低，首座×示范在建仍走 S-P05b 中地板；S-F02 里程碑与 S-F01 首证同步不触发；S-A04 常规发电项目汇总稿硬上限——多个/一批×新能源项目×并网/投产族（晶硅光伏/常规风电/水电等成熟技术组合）→ 低，题名点名钙钛矿/量子点/有机/海上漂浮式/单机大容量风机等低TRL新型发电技术除外；S-P02 须政策本体锚点（《》文件名×发布/印发族或国家级主体），十五五类媒体投资解读稿（出炉/定调/释放信号/投资方向）改判 T23 入参考区。</p><p><b>v1.09 展示链路与预置叶冻结</b>：展示分类＝论文（T01 四分型逐条判定：综述／研究型／分析类／新闻·评论·观点）／新闻（知识资产/工程与产业化/企业经营合作与资本/资源市场与产业链/政策法规与标准/人才与组织动态/观点与交流）＋归入大类 A科研知识·B产业化主链(链2-5)·C企业支撑·D外部环境（依据《新闻类型展示分类.xlsx》与 02 机制表《大类与产业链导航》），纯展示标注不影响 S1–S10 评分/档位/优先级；LLM 语义判定层预置叶冻结——除非与零碳产业/AI与智能科技/通用技术完全无关（域外），新闻与文献必须归入预置叶子节点/预置类型，禁止自拟"扩展:"新路径与新增节点（2026-09-24 口径）。</p><p><b>v1.11 直评口径（用户 2026-09-25 修订）</b>：不设 参考/待定/忽略 类目——入域记录一律直接按机制给出 高/中/低（T02 走 S-R01 报告粗分档、T25 经通用技术知识卡兜底、范围忽略只作审计不再拦截评分）；没进域（域外）的不评分。主输出即全集（四件套），无过滤、无额外存档件；ignored/typePending 保留为审计字段与计数。</p></details>
 <script>
 const DATA=__DATA_JSON__, STATS=__STATS_JSON__, OUTSIDE=__OUTSIDE_JSON__;
 let sortK="date", sortAsc=true, selIdx=-1;
@@ -2364,7 +2367,7 @@ const $=s=>document.querySelector(s), esc=s=>String(s??"").replace(/[&<>"']/g,c=
 const el={stats:$("#stats"),tb:$("#tb"),count:$("#count"),detail:$("#detail"),src:$("#f-src"),date:$("#f-date"),dom:$("#f-dom"),type:$("#f-type"),disp:$("#f-disp"),att:$("#f-att"),reason:$("#f-reason"),topic:$("#f-topic"),q:$("#f-q")};
 function fill(sel,vals){sel.insertAdjacentHTML("beforeend",vals.filter(Boolean).map(v=>`<option value="${esc(v)}">${esc(v)}</option>`).join(""))}
 fill(el.src,[...new Set(DATA.map(x=>x.src))].sort());fill(el.date,[...new Set(DATA.map(x=>x.date))].sort().reverse());fill(el.dom,[...new Set(DATA.map(x=>x.domain).filter(Boolean))].sort());fill(el.type,[...new Set(DATA.map(x=>x.type))].sort());fill(el.disp,[...new Set(DATA.map(x=>x.domainDisp))].sort());fill(el.att,[...new Set(DATA.map(x=>x.attention))].sort());fill(el.reason,OUTSIDE.reasons.map(x=>x.name));fill(el.topic,OUTSIDE.topics.map(x=>x.name));
-const statDefs=[["records","去重后记录",""],["duplicates","合并重复",""],["eventMerged","事件级合并",""],["mainDomain","已归技术领域","hi"],["semanticOnly","语义/扩展域",""],["outOfScope","明确域外","hi click"],["high","高",""],["medium","中",""],["low","低",""],["refZone","参考区(分析/报告)",""],["p0","P0技术优先","hi"],["p1","P1产业制度",""],["p2","P2软信息后置",""],["s10Floored","S10地板升档",""],["s10Capped","S10上限降档",""],["sourceHinted","信源提示分",""],["llmJudged","LLM语义判定",""],["typePending","类型待定",""]];
+const statDefs=[["records","去重后记录",""],["duplicates","合并重复",""],["eventMerged","事件级合并",""],["mainDomain","已归技术领域","hi"],["semanticOnly","语义/扩展域",""],["outOfScope","明确域外","hi click"],["high","高",""],["medium","中",""],["low","低",""],["p0","P0技术优先","hi"],["p1","P1产业制度",""],["p2","P2软信息后置",""],["s10Floored","S10地板升档",""],["s10Capped","S10上限降档",""],["sourceHinted","信源提示分",""],["llmJudged","LLM语义判定",""]];
 el.stats.innerHTML=statDefs.map(([k,l,c])=>`<div class="stat ${c}" data-k="${k}"><b>${STATS[k]}</b><span>${l}</span></div>`).join("");
 $("#outside-total").textContent=OUTSIDE.total;
 el.stats.querySelector('[data-k="outOfScope"]').onclick=()=>{el.disp.value="域外";render()};
@@ -2372,10 +2375,9 @@ function summaryRows(target,rows,field,limit=99){const max=Math.max(...rows.map(
 summaryRows("#reason-summary",OUTSIDE.reasons,"reason");summaryRows("#type-summary",OUTSIDE.types,"type",12);summaryRows("#topic-summary",OUTSIDE.topics,"topic");
 function dispBadge(v){const c=v==="主域"?"b-ok":v==="主域(草案)"||v==="主域(语义域)"?"b-draft":v==="域外"?"b-out":"b-sub";return `<span class="badge ${c}">${esc(v)}</span>`}
 function attBadge(v){const c=v==="高"?"b-high":v==="中"?"b-mid":v==="域外"||v==="低"?"b-low":"b-sub";return `<span class="badge ${c}">${esc(v)}</span>`}
-function render(){const q=el.q.value.trim().toLowerCase();const list=DATA.map((x,i)=>({...x,i})).filter(x=>x.section!=="参考区"&&(!el.src.value||x.src===el.src.value)&&(!el.date.value||x.date===el.date.value)&&(!el.dom.value||x.domain===el.dom.value)&&(!el.type.value||x.type===el.type.value)&&(!el.disp.value||x.domainDisp===el.disp.value)&&(!el.att.value||x.attention===el.att.value)&&(!el.reason.value||x.outsideReason===el.reason.value)&&(!el.topic.value||x.outsideTopic===el.topic.value)&&(!q||(x.title+" "+x.domain+" "+x.type+" "+x.domainReason+" "+x.typeReason+" "+x.outsideReason).toLowerCase().includes(q)));list.sort((a,b)=>{const va=a[sortK]??-1,vb=b[sortK]??-1,c=typeof va==="number"?va-vb:String(va).localeCompare(String(vb),"zh");return sortAsc?c:-c});el.count.textContent=`显示 ${list.length} / ${DATA.length} 条${el.disp.value==="域外"?" · 域外原因与类型可继续组合筛选":""}`;el.tb.innerHTML=list.map(x=>`<tr data-i="${x.i}" class="${x.i===selIdx?"sel":""}"><td class="num">${x.date.slice(5)}</td><td>${esc(x.src)}<div class="small">${esc(x.meta).slice(0,18)}</div></td><td class="tl">${x.url?`<a href="${esc(x.url)}" target="_blank" rel="noopener noreferrer">${esc(x.title)}</a>`:esc(x.title)}${x.duplicates?` <span class="badge b-out">重复×${x.duplicates}</span>`:""}</td><td>${dispBadge(x.domainDisp)}</td><td>${attBadge(x.attention)}${x.priorityTier?` <span class="badge ${x.priorityTier==="P0"?"b-ok":"b-sub"}" title="v1.02 优先级分层">${esc(x.priorityTier)}</span>`:""}${x.llmJudged?` <span class="badge b-draft" title="大模型语义判定（两份基准 docx）">LLM</span>`:""}</td><td class="num">${esc(x.valueDisplay)}</td><td>${esc(x.domain||"—")}<div class="small">${esc(x.domainConfidence)}</div></td><td>${esc(x.type)}<div class="small">${esc(x.typeConfidence)}</div></td><td>${esc(x.displaySubcategory||"—")}<div class="small">${esc(x.displayCategory||"")} · 归入${esc(x.displayClass||"—")}</div></td><td>${x.outsideReason?`<span class="badge b-out">${esc(x.outsideReason.split(" ")[0])}</span> ${esc(x.outsideReason.replace(/^O\\d+\\s*/,""))}<div class="small">${esc(x.outsideTopic)}</div>`:"—"}</td></tr>`).join("");el.tb.querySelectorAll("tr").forEach(tr=>tr.onclick=()=>show(Number(tr.dataset.i)))}
-function show(i){selIdx=i;const x=DATA[i];el.detail.style.display="block";el.detail.innerHTML=`<h3>${esc(x.title)}</h3><div class="kv"><dt>来源</dt><dd>${esc(x.src)} · ${esc(x.meta)} · ${esc(x.date)} · 正文质量 ${esc(x.contentQuality)}</dd><dt>链接</dt><dd>${x.url?`<a href="${esc(x.url)}" target="_blank" rel="noopener noreferrer">${esc(x.url)}</a>`:"—"}</dd><dt>领域处置</dt><dd>${dispBadge(x.domainDisp)} ${esc(x.domain||"未归域")} · ${esc(x.domainConfidence)}</dd><dt>领域规则</dt><dd>${esc(x.domainRule)}</dd><dt>领域理由</dt><dd>${esc(x.domainReason)}</dd><dt>领域证据</dt><dd>${esc(x.domainTerms.join("、")||"—")}<br>${esc(x.domainSnippet||"")}</dd>${x.outsideReason?`<dt>域外原因</dt><dd><b>${esc(x.outsideReason)}</b><br>${esc(x.outsideReasonDetail)}<br>内容主题：${esc(x.outsideTopic)}</dd>`:""}<dt>新闻类型</dt><dd>${esc(x.type)} · ${esc(x.typeConfidence)}</dd><dt>展示分类</dt><dd>${esc(x.displayCategory||"—")} · ${esc(x.displaySubcategory||"—")} · 归入${esc(x.displayClass||"—")}<div class="small">v1.09 展示链路（02机制表《大类与产业链导航》），仅展示不影响评分</div></dd><dt>类型规则</dt><dd>${esc(x.typeRule)}</dd><dt>类型理由</dt><dd>${esc(x.typeReason)}</dd><dt>类型证据</dt><dd>${esc(x.typeEvidence||"—")}</dd><dt>新闻价值</dt><dd>${esc(x.valueDisplay)} · ${esc(x.scoreBand)} · ${esc(x.scoreStatus)}${x.cardName?" · "+esc(x.cardName):""}</dd><dt>评分路线</dt><dd>${esc(x.route||"—")} · ${esc(x.routeTrlBand||"—")} · w=${x.weight??"—"}</dd><dt>Gate/缺口</dt><dd>${esc(x.gateActions.join("；")||"—")}<br>${esc(x.missingEvidence.join("；")||"")}</dd></div>${x.dimensions?.length?`<h4>评分卡维度</h4><ul class="dims">${x.dimensions.map(d=>`<li>${esc(d[0])}：${d[1]}/${d[2]} — ${esc(d[3])}</li>`).join("")}</ul>`:""}${x.scoreAudit?.length?`<h4>S1–S8审计链</h4><ol class="dims">${x.scoreAudit.map(a=>`<li><b>${esc(a[0])} ${esc(a[1])}</b>：${esc(a[2])}</li>`).join("")}</ol>`:""}`;render();renderRef();el.detail.scrollIntoView({behavior:"smooth",block:"nearest"})}
-function renderRef(){const refs=DATA.map((x,i)=>({...x,i})).filter(x=>x.section==="参考区");const box=$("#refbox");if(!refs.length){box.style.display="none";$("#refh").style.display="none";$("#refcount").style.display="none";return}box.style.display="";$("#refh").style.display="";$("#refcount").style.display="";refs.sort((a,b)=>String(b.date).localeCompare(String(a.date))||((b.value??-1)-(a.value??-1))||String(a.title).localeCompare(String(b.title),"zh"));$("#refcount").textContent=`参考区 ${refs.length} 条（T02 研究报告 / T23 深度分析与评论）· 按日期倒序，分数仅作排序参考，不分高中低档`;$("#tbr").innerHTML=refs.map(x=>`<tr data-i="${x.i}" class="${x.i===selIdx?"sel":""}"><td class="num">${x.date.slice(5)}</td><td>${esc(x.src)}<div class="small">${esc(x.meta).slice(0,18)}</div></td><td class="tl">${x.url?`<a href="${esc(x.url)}" target="_blank" rel="noopener noreferrer">${esc(x.title)}</a>`:esc(x.title)}${x.duplicates?` <span class="badge b-out">重复×${x.duplicates}</span>`:""}</td><td>${dispBadge(x.domainDisp)}</td><td class="num">${esc(x.valueDisplay)}<div class="small">底层 ${esc(x.bandUnderlying||"—")}</div></td><td>${esc(x.domain||"—")}<div class="small">${esc(x.domainConfidence)}</div></td><td>${esc(x.type)}${x.llmJudged?` <span class="badge b-draft" title="大模型语义判定">LLM</span>`:""}</td><td>${esc(x.displaySubcategory||"—")}<div class="small">${esc(x.displayCategory||"")} · 归入${esc(x.displayClass||"—")}</div></td></tr>`).join("");$("#tbr").querySelectorAll("tr").forEach(tr=>tr.onclick=()=>show(Number(tr.dataset.i)))}
-document.querySelectorAll("th[data-k]").forEach(th=>th.onclick=()=>{const k=th.dataset.k;sortAsc=sortK===k?!sortAsc:true;sortK=k;render()});[el.src,el.date,el.dom,el.type,el.disp,el.att,el.reason,el.topic].forEach(s=>s.onchange=render);el.q.oninput=render;render();renderRef();
+function render(){const q=el.q.value.trim().toLowerCase();const list=DATA.map((x,i)=>({...x,i})).filter(x=>(!el.src.value||x.src===el.src.value)&&(!el.date.value||x.date===el.date.value)&&(!el.dom.value||x.domain===el.dom.value)&&(!el.type.value||x.type===el.type.value)&&(!el.disp.value||x.domainDisp===el.disp.value)&&(!el.att.value||x.attention===el.att.value)&&(!el.reason.value||x.outsideReason===el.reason.value)&&(!el.topic.value||x.outsideTopic===el.topic.value)&&(!q||(x.title+" "+x.domain+" "+x.type+" "+x.domainReason+" "+x.typeReason+" "+x.outsideReason).toLowerCase().includes(q)));list.sort((a,b)=>{const va=a[sortK]??-1,vb=b[sortK]??-1,c=typeof va==="number"?va-vb:String(va).localeCompare(String(vb),"zh");return sortAsc?c:-c});el.count.textContent=`显示 ${list.length} / ${DATA.length} 条${el.disp.value==="域外"?" · 域外原因与类型可继续组合筛选":""}`;el.tb.innerHTML=list.map(x=>`<tr data-i="${x.i}" class="${x.i===selIdx?"sel":""}"><td class="num">${x.date.slice(5)}</td><td>${esc(x.src)}<div class="small">${esc(x.meta).slice(0,18)}</div></td><td class="tl">${x.url?`<a href="${esc(x.url)}" target="_blank" rel="noopener noreferrer">${esc(x.title)}</a>`:esc(x.title)}${x.duplicates?` <span class="badge b-out">重复×${x.duplicates}</span>`:""}</td><td>${dispBadge(x.domainDisp)}</td><td>${attBadge(x.attention)}${x.priorityTier?` <span class="badge ${x.priorityTier==="P0"?"b-ok":"b-sub"}" title="v1.02 优先级分层">${esc(x.priorityTier)}</span>`:""}${x.llmJudged?` <span class="badge b-draft" title="大模型语义判定（两份基准 docx）">LLM</span>`:""}</td><td class="num">${esc(x.valueDisplay)}</td><td>${esc(x.domain||"—")}<div class="small">${esc(x.domainConfidence)}</div></td><td>${esc(x.type)}<div class="small">${esc(x.typeConfidence)}</div></td><td>${esc(x.displaySubcategory||"—")}<div class="small">${esc(x.displayCategory||"")} · 归入${esc(x.displayClass||"—")}</div></td><td>${x.outsideReason?`<span class="badge b-out">${esc(x.outsideReason.split(" ")[0])}</span> ${esc(x.outsideReason.replace(/^O\\d+\\s*/,""))}<div class="small">${esc(x.outsideTopic)}</div>`:"—"}</td></tr>`).join("");el.tb.querySelectorAll("tr").forEach(tr=>tr.onclick=()=>show(Number(tr.dataset.i)))}
+function show(i){selIdx=i;const x=DATA[i];el.detail.style.display="block";el.detail.innerHTML=`<h3>${esc(x.title)}</h3><div class="kv"><dt>来源</dt><dd>${esc(x.src)} · ${esc(x.meta)} · ${esc(x.date)} · 正文质量 ${esc(x.contentQuality)}</dd><dt>链接</dt><dd>${x.url?`<a href="${esc(x.url)}" target="_blank" rel="noopener noreferrer">${esc(x.url)}</a>`:"—"}</dd><dt>领域处置</dt><dd>${dispBadge(x.domainDisp)} ${esc(x.domain||"未归域")} · ${esc(x.domainConfidence)}</dd><dt>领域规则</dt><dd>${esc(x.domainRule)}</dd><dt>领域理由</dt><dd>${esc(x.domainReason)}</dd><dt>领域证据</dt><dd>${esc(x.domainTerms.join("、")||"—")}<br>${esc(x.domainSnippet||"")}</dd>${x.outsideReason?`<dt>域外原因</dt><dd><b>${esc(x.outsideReason)}</b><br>${esc(x.outsideReasonDetail)}<br>内容主题：${esc(x.outsideTopic)}</dd>`:""}<dt>新闻类型</dt><dd>${esc(x.type)} · ${esc(x.typeConfidence)}</dd><dt>展示分类</dt><dd>${esc(x.displayCategory||"—")} · ${esc(x.displaySubcategory||"—")} · 归入${esc(x.displayClass||"—")}<div class="small">v1.09 展示链路（02机制表《大类与产业链导航》），仅展示不影响评分</div></dd><dt>类型规则</dt><dd>${esc(x.typeRule)}</dd><dt>类型理由</dt><dd>${esc(x.typeReason)}</dd><dt>类型证据</dt><dd>${esc(x.typeEvidence||"—")}</dd><dt>新闻价值</dt><dd>${esc(x.valueDisplay)} · ${esc(x.scoreBand)} · ${esc(x.scoreStatus)}${x.cardName?" · "+esc(x.cardName):""}</dd><dt>评分路线</dt><dd>${esc(x.route||"—")} · ${esc(x.routeTrlBand||"—")} · w=${x.weight??"—"}</dd><dt>Gate/缺口</dt><dd>${esc(x.gateActions.join("；")||"—")}<br>${esc(x.missingEvidence.join("；")||"")}</dd></div>${x.dimensions?.length?`<h4>评分卡维度</h4><ul class="dims">${x.dimensions.map(d=>`<li>${esc(d[0])}：${d[1]}/${d[2]} — ${esc(d[3])}</li>`).join("")}</ul>`:""}${x.scoreAudit?.length?`<h4>S1–S8审计链</h4><ol class="dims">${x.scoreAudit.map(a=>`<li><b>${esc(a[0])} ${esc(a[1])}</b>：${esc(a[2])}</li>`).join("")}</ol>`:""}`;render();el.detail.scrollIntoView({behavior:"smooth",block:"nearest"})}
+document.querySelectorAll("th[data-k]").forEach(th=>th.onclick=()=>{const k=th.dataset.k;sortAsc=sortK===k?!sortAsc:true;sortK=k;render()});[el.src,el.date,el.dom,el.type,el.disp,el.att,el.reason,el.topic].forEach(s=>s.onchange=render);el.q.oninput=render;render();
 </script></body></html>'''
     page = page.replace("__DATA_JSON__", payload).replace("__STATS_JSON__", stats_json).replace("__OUTSIDE_JSON__", outside_json)
     with open(html_path, "w", encoding="utf-8") as f:
@@ -2392,14 +2394,19 @@ def validate(items, stats, outside_summary):
     assert all(x["outsideReason"] and x["outsideReasonDetail"] and x["outsideTopic"] for x in outside)
     assert all(not x["outsideReason"] for x in items if x["domainDisp"] != "域外")
     for key in ("reasons", "types", "topics", "sources"):
-        assert sum(row["count"] for row in outside_summary[key]) == outside_summary["total"], key
-    # 2026-09-23 v1.07：参考区一致性——T02/T23 分区展示，评分仅参考不分档。
-    refzone = [x for x in items if x["section"] == "参考区"]
-    assert len(refzone) == stats["refZone"], "refZone 统计与分区字段不一致"
-    assert all(x["typeId"] in {"T02", "T23"} for x in refzone), "参考区只允许 T02/T23"
-    assert all(x["scoreBand"] == "参考" and x["attention"] == "参考" and not x["priorityTier"]
-               for x in refzone), "参考区不得携带高中低档位或优先级层"
-    assert all(x["bandUnderlying"] in ("高", "中", "低") for x in refzone), "参考区底层档位缺失（bandUnderlying）"
+        assert sum(r["count"] for r in outside_summary[key]) == outside_summary["total"], key
+    # 2026-09-25 v1.11（用户口径修订）：不设 参考/待定/忽略 类目——
+    # attention 只允许 高/中/低/域外；入域必有三档（T02 S-R01 粗分档 / T25 通用卡兜底）；
+    # 域外＝未评分；档位计数与全集闭合；refZone/manual 审计位恒 0。
+    assert all(x["attention"] in ("高", "中", "低", "域外") for x in items), "存在 参考/待定/忽略 类目残留"
+    assert not any(x["section"] == "参考区" for x in items), "参考区残留（v1.11 起停用分区）"
+    in_dom = [x for x in items if x["domainDisp"] != "域外"]
+    assert all(x["scoreBand"] in ("高", "中", "低") for x in in_dom), "入域记录缺少 高/中/低 档位"
+    assert all(x["attention"] == x["scoreBand"] for x in in_dom), "入域记录 attention 与档位不一致"
+    assert all(x["scoreBand"] == "未评分" and x["value"] is None and x["attention"] == "域外"
+               for x in items if x["domainDisp"] == "域外"), "域外记录不应携带评分"
+    assert stats["high"] + stats["medium"] + stats["low"] + stats["outOfScope"] == len(items), "档位计数不闭合"
+    assert stats["refZone"] == 0 and stats["manual"] == 0, "参考/待定 审计位应为 0"
     # 2026-09-24 v1.09：展示链路一致性——每条记录带展示标注；域外标“域外”；计数闭合；映射完备。
     assert all(x["displayCategory"] and x["displaySubcategory"] and x["displayClass"]
                for x in items), "展示链路字段缺失"
