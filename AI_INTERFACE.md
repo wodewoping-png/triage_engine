@@ -1,4 +1,4 @@
-# AI_INTERFACE —— triage_engine 机器调用契约（v1.11）
+# AI_INTERFACE —— triage_engine 机器调用契约（v1.12）
 
 本文档面向**AI 程序/Agent/服务端调用方**：给出能力边界、端到端流程、输入/输出 JSON Schema、
 字段字典与全部评价机制表（未删减）。人类可读入门见 [README.md](README.md)。
@@ -14,6 +14,7 @@ LLM 语义准绳的编辑源）。运行层不读 docx/xlsx：docx 的依次分�
 
 输入三库行记录（新闻爬虫/微信公众号/文献 RSS），输出每条记录的：**技术领域判定 + 新闻类型判定 +
 新闻价值评分（S1–S8）+ 优先级层（S9）+ 档位政策结果（S10）+ 直评口径（v1.11：入域直接 高/中/低，域外不评分）+
+链位展示（v1.12：性能突破→应用验证→工程示范→产品发布→企业动态→产业链，纯展示）+
 事件级去重合并**，并生成 JSON/CSV/域外分析/HTML 看板四件套。规则层纯标准库、确定性、可离线。
 
 ## 2. 端到端流程
@@ -41,6 +42,7 @@ S10 档位政策（地板/硬上限/上限/论文统一档位）——只改档�
                     （T02 走 S-R01 粗分档、T25 经通用技术卡兜底、范围忽略 ignored 仅审计字段）；
                     域外不评分（scoreBand=未评分、attention=域外）。v1.07 参考区分区停用（section 恒主榜）。
                      → 【v1.09 展示链路】按最终类型映射 展示大类（论文/新闻）/展示小类/归入大类（A/B/C/D）三字段（纯展示，不进评分）
+                     → 【v1.12 链位展示】CHAIN_STAGE_MAP 类型级映射 展示链位（链1 性能突破…链6 产业链，非主链类型全部折进六链路；纯展示，不进评分）
   │  ⑤ 事件级去重（union-find）：C-R01 DOI / C-R03 文号名·题名相似
   ▼
 排序（分区 → 日期 → 层 → -分值 → 关注 → 标题）→ 四件套写盘（out_dir）→ validate 结构断言
@@ -77,17 +79,18 @@ S10 档位政策（地板/硬上限/上限/论文统一档位）——只改档�
 
 ```json
 {
-  "method": "…+doi-carrier-premise-v110+direct-banding-v111",
+  "method": "…+doi-carrier-premise-v110+direct-banding-v111+chain-stage-display-v112",
   "stats": { "raw", "records", "duplicates", "eventMerged", "mainDomain", "semanticOnly",
              "outOfScope", "typePending", "high", "medium", "low", "refZone", "manual", "unscored",
              "p0", "p1", "p2", "s10Floored", "s10Capped", "bandCapped", "sourceHinted", "llmJudged",
-             "displayChain", "paperSubtypes", ... },
+             "displayChain", "paperSubtypes", "displayStage", ... },
   "outsideSummary": { "total", "reasons[]", "types[]", "topics[]", "sources[]" },
   "items": [ /* 字段字典见 §4.2 */ ]
 }
 ```
 
 注意：v1.11 直评口径——`high/medium/low` 覆盖**全部入域记录**（无 参考/待定/忽略 类目；`refZone`/`manual` 恒 0 保留为审计位）；`high+medium+low+outOfScope == records` 闭合。
+v1.12 链位展示——`displayStage` 六链路＋待定＋域外“—” 计数闭合（`sum(displayStage.values()) == records`），纯展示不影响任何评分字段。
 
 ### 4.2 item 字段字典（全量）
 
@@ -109,6 +112,7 @@ S10 档位政策（地板/硬上限/上限/论文统一档位）——只改档�
 | `displayCategory` | **v1.09**：展示大类——论文（T01）/新闻（T02–T24）/待定（T25）；域外记录为 `—` | 
 | `displaySubcategory` | **v1.09**：展示小类——论文=四分型**逐条判定**（综述/研究型/分析类/新闻·评论·观点；题名综述词→综述，评估/情景/技术经济词→分析类，非文献源（媒体解读/转载报道，全文转载特征除外）→新闻·评论·观点，默认研究型）；新闻=知识资产/工程与产业化/企业经营合作与资本/资源市场与产业链/政策法规与标准/人才与组织动态/观点与交流；域外=`域外` |
 | `displayClass` | **v1.09**：归入大类 A科研知识/B产业化主链(链2-5)/C企业支撑/D外部环境（依据《新闻类型展示分类.xlsx》与 02 机制表《大类与产业链导航》）；纯展示不影响 S1–S10 |
+| `displayStage` | **v1.12**：展示链位（02 机制表《大类与产业链导航》链位1–6）——`链1 性能突破`（T01 论文/T02 报告/T03 专利/T04 软著/T22 观点/T23 深度分析/T24 会议）/`链2 应用验证`（T07 工程验证/T06 第三方测试/T20 法规标准认证）/`链3 工程示范`（T08 项目设施/T05 科研项目）/`链4 产品发布`（T09）/`链5 企业动态`（T10 生产运行/T11 经营/T12 合作/T13 投融资/T14 并购/T21 人才）/`链6 产业链`（T17 供应链/T18 采购/T16 市场贸易/T15 资源/T19 政策战略）；T25→`待定`；域外→`—`。用户 2026-10-20 口径：非主链类型全部折进六链路，**纯展示不进 S1–S10、不改档位/优先级，具体评分仍按 T 小类**；类型级确定性映射（`CHAIN_STAGE_MAP`），调整归属只改该表 |
 | `llmJudged` | 是否被 LLM 语义判定覆盖 |
 | `value` / `valueDisplay` | S8 分值（T02 报告为区间串如 `35–54`，value=null） |
 | `attention` | **v1.11 直评**：`高`/`中`/`低`（入域）或 `域外`（未入域，不评分） |
@@ -200,6 +204,7 @@ S10（顺序：硬上限 → 地板 → 常规上限 → 论文统一档位；v1
 | 前提 | **C-T16 载体前提（v1.10，DOI×语义共决）** | 前提① `src=literature` 一律 T01；前提② wechat/news 的 DOI（字段/链接/正文）只是引用线索——**有 DOI ≠ 论文**：论文本体载体（《刊名》文章/全文转载/学术速递/网络首发/引用本文）或题名期刊锚定＋学术命题才可 T01（正文级 DOI 不再单独构成载体）；DOI 迹象×题名媒体分析/报道框架（解读/评述/盘点/梳理/综述：/科普/评论/观点/Top N/据报道/科学家发现/Scientists discover/study shows 等）×学术命题×非本体载体 → 改判 T23（typeRule=`C-G05/C-T16-DOI载体前提`，DOI 记入证据链）；证据级 E1 收窄为 literature 源，wechat/news 带 DOI → E2『报道引用论文 DOI（二手可溯源）』 | T01 收紧 / 假文献→T23 直评三档 |
 | 输出 | **直评口径（v1.11）** | 不设 参考/待定/忽略 类目：入域记录 attention=scoreBand=高/中/低（T02 走 S-R01 粗分档：scoreStatus=区间评分、value=null、valueDisplay=区间串；T25 经通用技术知识卡 card_tech 兜底三档；范围忽略 `ignored`/`ignoredReason` 降为审计字段不再拦截）；域外不评分（scoreBand=未评分、attention=域外）；v1.07 参考区分区停用（section 恒主榜、bandUnderlying=scoreBand） | 主输出即全集，恒四件套 |
 | 展示 | **展示链路（v1.09）** | 按最终类型映射 `DISPLAY_CHAIN_MAP`：T01→论文·四分型**逐条判定**（综述/研究型/分析类/新闻·评论·观点，`_paper_display_subtype` 题名证据级联）·A；T02–T06→新闻·知识资产·A（T05 计分走 B链3）；T07–T10→工程与产业化·B(链2-5)；T11–T14→企业经营合作资本·C；T15–T18→资源市场产业链·C/D/B链6；T19/T20→政策法规标准·D；T21→人才组织·C；T22–T24→观点与交流·A；T25→待定；域外→`—/域外/—`。stats 增 `displayChain`＋`paperSubtypes` 计数。**不参与任何评分/档位/优先级**（用户 2026-09-24 口径） | 主榜（v1.11 恒主榜） |
+| 展示 | **链位展示（v1.12）** | `CHAIN_STAGE_MAP` 类型级映射 `displayStage`（链位1–6，用户 2026-10-20 口径：新闻按 性能突破→应用验证→工程示范→产品发布→企业动态→产业链 展示，非主链类型全部折进六链路；T25→待定、域外→`—`）；看板增「新闻六链路分布」面板＋链位筛选；stats 增 `displayStage` 计数（闭合）。**纯展示，具体评分仍按 T 小类** | 主榜（v1.11 恒主榜） |
 
 ### 5.5 LLM 语义判定层（可选第三轨）
 
@@ -250,7 +255,7 @@ S10（顺序：硬上限 → 地板 → 常规上限 → 论文统一档位；v1
 
 完整修订流水线（改哪、怎么验证、怎么同步、怎么发布）见 [MAINTENANCE.md](MAINTENANCE.md)；本节为要点。
 
-- 版本号在 `triage_engine.__version__` / `ENGINE_VERSION`；输出 JSON `method` 串尾部为机制标签（当前 `direct-banding-v111`）。
+- 版本号在 `triage_engine.__version__` / `ENGINE_VERSION`；输出 JSON `method` 串尾部为机制标签（当前 `chain-stage-display-v112`）。
 - 升级机制时：更新 `pipeline/` + `rules/` 快照、`ENGINE_VERSION`、README/AI_INTERFACE 版本表，
   并同步 `docs/` 下的机制表快照（02 评分框架表用开发仓 patch_workbooks 系列脚本增补后拷贝）
   与 `docs/requirements_ledger.txt`（与开发仓 `问题.txt` 同步）。

@@ -20,11 +20,11 @@ PKG_ROOT = os.path.dirname(os.path.abspath(__file__))
 PIPELINE_DIR = os.path.join(PKG_ROOT, "pipeline")
 RULES_DIR = os.path.join(PKG_ROOT, "rules")
 
-ENGINE_VERSION = "1.11"
+ENGINE_VERSION = "1.12"
 METHOD_TAG = ("semantic-llm-calibrated-v5+three-band-scoring-v1.04+priority-tiers"
               "+s10-band-policy-v104+llm-merge+event-dedup-v105+paper-band-v106b+ref-zone-v107"
               "+future-roundup-retype-v108+display-chain-v109+doi-carrier-premise-v110"
-              "+direct-banding-v111")
+              "+direct-banding-v111+chain-stage-display-v112")
 
 # v1.11 直评口径（用户 2026-09-25 修订）：不设 参考/待定/忽略 类目——入域直接三档，域外不评分。
 OUTPUT_FILES = ("semantic_results.json", "semantic_results.csv",
@@ -92,6 +92,16 @@ def _make_validator(out_dir):
         assert all(not x["outsideReason"] for x in items if x["domainDisp"] != "域外")
         for key in ("reasons", "types", "topics", "sources"):
             assert sum(r["count"] for r in outside_summary[key]) == outside_summary["total"], key
+        # v1.12 链位展示（用户 2026-10-20 口径）：新闻按链路层级 性能突破→应用验证→工程示范→
+        # 产品发布→企业动态→产业链 展示，非主链类型全部折进六链路——纯展示，类型级确定性映射。
+        import build_strict_semantic_triage as _s
+        assert all(x["displayStage"] == "—" for x in items
+                   if x["domainDisp"] == "域外"), "域外记录链位应为 —"
+        assert all(x["displayStage"] in _s.CHAIN_STAGES + ("待定",)
+                   for x in items if x["domainDisp"] != "域外"), "链位展示值非法"
+        assert all(x["typeId"] in _s.CHAIN_STAGE_MAP
+                   for x in items if x["domainDisp"] != "域外"), "CHAIN_STAGE_MAP 未覆盖出现的类型"
+        assert sum(stats["displayStage"].values()) == len(items), "displayStage 计数不闭合"
         # v1.11 直评口径：不设 参考/待定/忽略 类目——入域直接三档，域外不评分。
         assert all(x["attention"] in ("高", "中", "低", "域外") for x in items), "存在 参考/待定/忽略 类目残留"
         assert all(x["attention"] == x["scoreBand"] for x in items
@@ -104,7 +114,7 @@ def _make_validator(out_dir):
 
 def run(rows, out_dir, llm_decisions=None):
     """执行规则层全流程（分类 → 评分 S1–S8 → S9 分层 → S10 档位政策 → 事件级去重
-    → v1.11 直评口径 → 四件套输出）。
+    → v1.11 直评口径 → v1.12 链位展示 → 四件套输出）。
 
     参数：
       rows: 行记录字典列表。必填键：src(news-spider|wechat|literature)/date(ISO)/title/body；

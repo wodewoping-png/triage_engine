@@ -2,9 +2,10 @@
 """triage_engine 冒烟测试：合成 12 条行记录跑通规则层全流程，
 覆盖 v1.07 机制（AI 模型发布题名锚定 T09）、v1.08 机制（S-A05 未来态计划低、
 S-A04 常规发电汇总稿低、B1 媒体投资解读改判 T23）、v1.10 载体前提 C-T16
-（DOI×语义共决：题名媒体框架×DOI → T23；全文转载本体载体 → T01）与
+（DOI×语义共决：题名媒体框架×DOI → T23；全文转载本体载体 → T01）、
 v1.11 直评口径（不设 参考/待定/忽略 类目：入域直接 高/中/低——T02 走 S-R01 粗分档；
-域外不评分；主输出即全集、四件套）。
+域外不评分；主输出即全集、四件套）与 v1.12 链位展示（新闻按六链路层级
+性能突破→应用验证→工程示范→产品发布→企业动态→产业链 折进展示，纯展示不进评分）。
 运行：PYTHONIOENCODING=utf-8 python -m pytest triage_engine/tests -q
   或：PYTHONIOENCODING=utf-8 python -m triage_engine.tests.test_smoke
 """
@@ -156,7 +157,7 @@ def _find(result, title_prefix):
 
 
 def test_engine_smoke():
-    assert ENGINE_VERSION == "1.11"
+    assert ENGINE_VERSION == "1.12"
     with tempfile.TemporaryDirectory() as out_dir:
         result = run(_rows(), out_dir)
 
@@ -165,7 +166,7 @@ def test_engine_smoke():
                    "域外内容分析_20260615-23.csv",
                    "三库严格语义分类看板_20260615-23.html"):
             assert os.path.getsize(os.path.join(out_dir, fn)) > 100, fn
-        assert result["method"].endswith("direct-banding-v111")
+        assert result["method"].endswith("chain-stage-display-v112")
         assert result["stats"]["records"] == len(result["items"]) == 12  # 12 行全部留主输出
 
         # v1.11：不设 参考/待定/忽略 类目——attention 只剩 高/中/低/域外；审计位归零
@@ -254,13 +255,30 @@ def test_engine_smoke():
         assert out_rec["displayCategory"] == "—"  # 域外 → 展示标域外
         assert sum(result["stats"]["displayChain"].values()) == result["stats"]["records"]
 
+        # v1.12 链位展示：六链路折进映射（纯展示）——类型级确定性映射，评分链路零变动
+        assert paper["displayStage"] == "链1 性能突破"   # T01 论文 → 链1（研究型性能突破进链）
+        assert rep["displayStage"] == "链1 性能突破"     # T02 报告（知识通道）→ 链1
+        assert ai["displayStage"] == "链4 产品发布"      # T09 产品装备 → 链4
+        assert fut["displayStage"] == "链3 工程示范"     # T08 项目设施 → 链3
+        assert coop["displayStage"] == "链5 企业动态"    # T12 合作 → 链5（用户指定折入）
+        assert pi["displayStage"] == "链1 性能突破"      # T23 深度分析 → 链1
+        assert reprint["displayStage"] == "链1 性能突破"  # 全文转载 T01 → 链1
+        for x in (out_rec, catl):
+            assert x["displayStage"] == "—"              # 域外 → 链位 “—”
+        ds = stats["displayStage"]
+        assert set(ds) == {"链1 性能突破", "链2 应用验证", "链3 工程示范",
+                           "链4 产品发布", "链5 企业动态", "链6 产业链", "待定", "—"}
+        assert sum(ds.values()) == stats["records"]      # 链位计数闭合
+        assert ds["链1 性能突破"] == 6 and ds["链4 产品发布"] == 1 \
+            and ds["链3 工程示范"] == 1 and ds["链5 企业动态"] == 2 and ds["—"] == 2
+
         # 档位分布闭合：高 1（T02 报告）/ 中 4（T09·T01×2·C-T16 假文献 S-P10）/ 低 5 / 域外 2
         assert (stats["high"], stats["medium"], stats["low"], stats["outOfScope"]) == (1, 4, 5, 2)
 
-    print("triage_engine smoke OK：v1.07+v1.08+v1.09+v1.10+v1.11 机制（T09 题名锚定 / "
+    print("triage_engine smoke OK：v1.07+v1.08+v1.09+v1.10+v1.11+v1.12 机制（T09 题名锚定 / "
           "S-A05 未来态 / S-A04 汇总稿 / B1 媒体解读改判 / C-T16 载体前提（假文献→T23·全文转载→T01） / "
           "直评口径（12 条全留主输出：T02 S-R01 高 / T23 直接低 / 域外不评分·ignored 仅审计） / "
-          "T01 中档 / 展示链路）全部落位")
+          "T01 中档 / 展示链路 / 六链路折进展示）全部落位")
 
 
 if __name__ == "__main__":
