@@ -20,11 +20,16 @@ PKG_ROOT = os.path.dirname(os.path.abspath(__file__))
 PIPELINE_DIR = os.path.join(PKG_ROOT, "pipeline")
 RULES_DIR = os.path.join(PKG_ROOT, "rules")
 
-ENGINE_VERSION = "1.12"
+ENGINE_VERSION = "1.17"
 METHOD_TAG = ("semantic-llm-calibrated-v5+three-band-scoring-v1.04+priority-tiers"
               "+s10-band-policy-v104+llm-merge+event-dedup-v105+paper-band-v106b+ref-zone-v107"
               "+future-roundup-retype-v108+display-chain-v109+doi-carrier-premise-v110"
-              "+direct-banding-v111+chain-stage-display-v112")
+              "+direct-banding-v111+chain-stage-display-v112"
+              "+chain-tag-display-v113"
+              "+meeting-promo-v114"
+              "+award-notice-cap-v115"
+              "+total-typing-v116"
+              "+total-domain-v117")
 
 # v1.11 直评口径（用户 2026-09-25 修订）：不设 参考/待定/忽略 类目——入域直接三档，域外不评分。
 OUTPUT_FILES = ("semantic_results.json", "semantic_results.csv",
