@@ -21,7 +21,10 @@ RULES = os.path.normpath(os.path.join(HERE, "..", "classification-scoring-rules-
 sys.path.insert(0, HERE)
 sys.path.insert(0, RULES)
 
-from semantic_contract import CONTRACT_VERSION, ENGINE_VERSION, domain_menu, passage, record_id, validate as validate_decision
+from semantic_contract import (
+    CONTRACT_VERSION, ENGINE_VERSION, domain_menu, evidence_error, passage, record_id,
+    validate as validate_fields, validate_stages,
+)
 import build_github_triage as base
 from cls_data import TYPES, DOMAIN_CLS, PRE_CLASSIFICATION_GATES, TYPE_DECISION_RULES
 from expand_domains_data import EXPAND_DOMAINS, DOMAIN_DECISION_RULES, DOMAIN_PRIORITY_RULES
@@ -566,6 +569,14 @@ def _cooccur(pattern_a, pattern_b, text, span=72):
     return ""
 
 
+PAPER_BODY_CARRIER_R = re.compile(r"《[^》]{2,20}》(?:文章|论文|全文)|学术速递|论文速递|研究进展速递|"
+                                          r"文献速递|网络首发|引用本文", re.I)
+MEDIA_ANALYSIS_FRAME_R = re.compile(r"解读|评述|评析|剖析|深度分析|盘点|梳理|知识分享|一文读懂|科普|评论|观点|详解|拆解|综述[：:｜]|"
+                                            r"Top\s*\d+|周榜|月榜|据(?:报道|了解)|"
+                                            r"科学家(?:发现|揭示)|研究者(?:发现|揭示)|[Ss]cientists?\s+(?:discover|find|reveal|turn)|"
+                                            r"[Ss]tudy\s+(?:shows|finds|reveals|suggests)", re.I)
+
+
 def classify_type_semantic(item):
     title, body = item["title"], item["body"]
     lead, text = body[:1200], title + "\n" + body[:2500]
@@ -625,8 +636,7 @@ def classify_type_semantic(item):
     #     改判 T23 深度分析（题名锚定，与 M1 同口径），DOI 记入证据链。
     doi_signal = bool(item.get("doi") or _rx(r"\b10\.\d{4,9}/\S+|arXiv[:\s]*\d+|\bDOI\b|doi\.org",
                                              (item.get("url") or "") + " " + text))
-    paper_body_carrier = bool(_rx(r"《[^》]{2,20}》(?:文章|论文|全文)|学术速递|论文速递|研究进展速递|"
-                                          r"文献速递|网络首发|引用本文", title + "\n" + lead))
+    paper_body_carrier = bool(PAPER_BODY_CARRIER_R.search(title + "\n" + lead))
     # 2026-09-20 v1.04（M11）：『发表于/刊登于』从论文结构证据中移除——报纸评论（经济日报
     # 专栏『构筑生产性服务业品牌矩阵』）同样有『发表于』，不足以判定论文载体。
     paper_structure = bool(_rx(r"论文标题|论文链接|文献详情|网络首发|摘要|DOI|arXiv|"
@@ -637,11 +647,7 @@ def classify_type_semantic(item):
     industrial_title = bool(base.INDUS_TITLE_R.search(title))
     # v1.10：题名级媒体分析/报道框架词——DOI 迹象×此框架 ⇒ 引用论文的报道/分析稿，非文献本体。
     # （综述：/study shows/Scientists discover 属转述框架；全文转载/速递载体在上方 paper_body_carrier 先行豁免）
-    media_analysis_frame = bool(_rx(r"解读|评述|评析|剖析|深度分析|盘点|梳理|知识分享|一文读懂|科普|评论|观点|详解|拆解|综述[：:｜]|"
-                                            r"Top\s*\d+|周榜|月榜|据(?:报道|了解)|"
-                                            r"科学家(?:发现|揭示)|研究者(?:发现|揭示)|[Ss]cientists?\s+(?:discover|find|reveal|turn)|"
-                                            r"[Ss]tudy\s+(?:shows|finds|reveals|suggests)",
-                                            title))
+    media_analysis_frame = bool(MEDIA_ANALYSIS_FRAME_R.search(title))
     if doi_signal and media_analysis_frame and paper_claim and not paper_body_carrier:
         return type_result("T23", "C-G05/C-T16-DOI载体前提",
                            "题名呈媒体分析/报道框架×DOI 引用线索——引用论文的报道/分析稿，非文献本体（有 DOI ≠ 论文）；"
@@ -1385,7 +1391,11 @@ def _load_llm_decisions():
         print(f"[warn] llm_semantic_decisions.json 解析失败，忽略：{e}")
         return {}
     if isinstance(data, dict) and isinstance(data.get("decisions"), (list, dict)):
-        if data.get("version") == CONTRACT_VERSION:
+        version = str(data.get("version", ""))
+        if version.startswith("evidence-") and version != CONTRACT_VERSION:
+            print("[warn] 版本化模型决策需按当前事实检查重新生成，使用规则层")
+            return {}
+        if version == CONTRACT_VERSION:
             if data.get("engine_version") != ENGINE_VERSION:
                 print("[warn] 模型判定的引擎版本不匹配，使用规则层")
                 return {}
@@ -1398,6 +1408,60 @@ def _load_llm_decisions():
     if isinstance(data, list):
         data = {d.get("url"): d for d in data if isinstance(d, dict) and d.get("url")}
     return {k: v for k, v in data.items() if isinstance(v, dict)}
+
+
+def validate_decision(dec, shown, domains, types):
+    """Validate the intermediate facts before accepting, resuming or merging a decision."""
+    error = validate_fields(dec, shown, domains, types)
+    if error:
+        return error
+    error = validate_stages(dec, shown, FUTURE_LANDED_R)
+    if error:
+        return error
+    return _validate_carrier(dec, shown)
+
+
+def _validate_carrier(dec, shown):
+    tid, title = dec["type_id"], shown["title"]
+    fact = dec.get("carrier_fact")
+    if shown["src"] == "literature" or (tid not in ("T01", "T19", "T23") and fact is None):
+        return ""
+    # Use the same classifier with its original early exits and reprint exemptions.
+    native = classify_type_semantic(shown)
+    expected, marker, rule = None, None, ""
+    if "C-T16" in native["rule"]:
+        expected, marker, rule = "论文报道", MEDIA_ANALYSIS_FRAME_R, "C-T16"
+    elif native["tid"] == "T01" and PAPER_BODY_CARRIER_R.search(title + "\n" + shown["body"][:1200]):
+        expected, marker, rule = "论文本体", PAPER_BODY_CARRIER_R, "C-T16"
+    elif tid in ("T19", "T23") and native["tid"] in ("T19", "T23") and _policy_interpretation(title):
+        expected, marker, rule = "政策解读", POLICY_INTERPRET_R, "B1"
+    elif (native["tid"] == "T19" and _policy_release_anchor(title)
+          and POLICY_RELEASE_ACT_R.search(title) and not POLICY_INTERPRET_R.search(title)):
+        expected, marker, rule = "政策发布", POLICY_RELEASE_ACT_R, "B1"
+
+    if fact is None and tid == "T23" and expected is None:
+        return ""  # General analysis may concern neither a paper nor a policy.
+    error = evidence_error(fact, shown)
+    if error:
+        return "carrier_fact " + error
+    kind = fact.get("kind")
+    if kind not in ("论文本体", "论文报道", "政策发布", "政策解读", "其他分析"):
+        return "carrier_fact.kind 须说明文章载体"
+    if expected and (kind != expected or not marker.search(fact["quote"])):
+        return rule + "：引文须支持「" + expected + "」并保留其载体标记"
+    if expected in ("政策解读", "政策发布", "论文报道") and fact["field"] != "title":
+        return rule + "：请引用触发载体判定的题名"
+    if tid == "T01" and re.fullmatch(
+            r"\s*(?:DOI\s*[:：]?\s*)?(?:https?://(?:dx\.)?doi\.org/)?10\.\d{4,9}/\S+\s*",
+            fact["quote"], re.I):
+        return "C-T16：单独的 DOI 不能作为论文本体的载体证据"
+    if tid == "T01" and kind != "论文本体":
+        return "T01 须由论文本体或全文转载证据支撑"
+    if tid == "T19" and kind != "政策发布":
+        return "T19 须由政策文件或发布动作证据支撑"
+    if tid == "T23" and kind in ("论文本体", "政策发布"):
+        return "T23 与载体事实冲突，请核查文章主事件"
+    return ""
 
 
 def _decision_for_item(decisions, item, domains):
@@ -1698,7 +1762,7 @@ PAPER_BREAKTHROUGH_TITLE_R = re.compile(
 # 与在建态区分：开工/建设中/加快建设（FUTURE_PROJECT_R）仍可走 S-P05b 首座示范中地板。
 FUTURE_LANDED_R = re.compile(
     r"(?:预计|拟|将|计划|有望|或将|将于|或于)[^，。；！？\n]{0,14}"
-    r"(?:商业运营|商业化运营|正式运营|投入运营|投运|投产|并网|建成|交付|量产)", re.I)
+    r"(?P<action>商业运营|商业化运营|正式运营|投入运营|投运|投产|并网|建成|交付|量产)", re.I)
 FUTURE_DEPLOY_R = re.compile(
     r"将在|将部署|拟部署|计划部署|将建设|将建|将投运|将投产|将并网|将布局|将落地", re.I)
 # W3 常规发电项目汇总稿：多个/一批×新能源项目×并网/投产 族——晶硅光伏/常规风电/水电等
@@ -1724,6 +1788,11 @@ def _policy_release_anchor(title):
     """B1 裁决（v1.08）：题名有政策本体锚点（《文件名》×发布/印发/出台族 或 国家级主体词）。"""
     return bool(POLICY_DOC_TITLE_R.search(title) and POLICY_RELEASE_ACT_R.search(title)) \
         or bool(NATIONAL_BODY_R.search(title))
+
+
+def _policy_interpretation(title):
+    return (NATIONAL_POLICY_R.search(title) and POLICY_INTERPRET_R.search(title)
+            and not _policy_release_anchor(title))
 
 
 def _is_focus_domain(dom):
@@ -2264,9 +2333,7 @@ def build():
         # 明确发布《规划》或部委发文的仍走 T19 主榜（S-P02 高）。
         _interp_retyped = False
         if (typ["tid"] == "T19" and dom.get("primary") and dom["disp"] != "域外"
-                and NATIONAL_POLICY_R.search(item["title"])
-                and POLICY_INTERPRET_R.search(item["title"])
-                and not _policy_release_anchor(item["title"])):
+                and _policy_interpretation(item["title"])):
             _interp_retyped = True
             typ = type_result(
                 "T23", "C-T08/T19-媒体解读改判（B1）",
@@ -2374,7 +2441,8 @@ def build():
             "displayStage": stage,
             "llmJudged": bool(llm_dec),
             **({"llmEvidence": {k: llm_dec[k] for k in ("event", "event_state", "domain_evidence",
-                                                       "event_evidence", "contract")}}
+                                                       "event_evidence", "contract", "stage_facts",
+                                                       "carrier_fact") if k in llm_dec}}
                if llm_dec and llm_dec.get("contract") == CONTRACT_VERSION else {}),
             "value": score["value"], "valueDisplay": score["valueDisplay"], "attention": attention,
             "scoreBand": score["band"], "scoreStatus": score["scoreStatus"],

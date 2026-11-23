@@ -34,11 +34,11 @@ if (getattr(sys.stdout, "encoding", "") or "").lower().replace("-", "") != "utf8
 import build_github_triage as base  # noqa: E402
 from cls_data import TYPES  # noqa: E402
 from build_strict_semantic_triage import (  # noqa: E402
-    EXTENSION_DOMAINS, classify_domain_semantic, classify_type_semantic)
+    EXTENSION_DOMAINS, classify_domain_semantic, classify_type_semantic, validate_decision)
 
 from lit_rules_data import ROUTING_DIGEST
 from semantic_contract import (
-    CONTRACT_VERSION, ENGINE_VERSION, digest, domain_menu, passage, record_id, validate,
+    CONTRACT_VERSION, ENGINE_VERSION, digest, domain_menu, passage, record_id,
 )
 
 # 本轮用户反馈的 10 条问题（URL 片段 / 标题关键词），无论规则层是否已修复都送 LLM 复核。
@@ -69,7 +69,13 @@ reason（一句判定依据）、confidence（high/medium/low）、event（主�
 event_state（计划中/进行中/已发生/原文未说明/不适用），以及 domain_evidence 和 event_evidence。
 两项证据各填 {{"field":"title 或 body","quote":"该字段中的连续原文"}}。可引用同一处。
 事件引文须保留动作的否定、预计、拟等限定，同一句有多个动作时须说明状态属于哪个动作。
-报道带 DOI 的文章须引用体现报道或转载身份的文字。请勿输出评分或选择重点新闻。
+先提取可查事实，再用同一组事实给出类型和主事件。项目设施或生产运行（T08/T10）须给
+stage_facts，每个相关动作一项：action（原文动作）、state（同 event_state）、field、quote。
+主事件 event 逐字等于所选 action，event_state 和 event_evidence 与该项一致。
+例如“已完成设备安装，预计明年商业运营”分别记录安装已发生、商业运营计划中。
+非文献源 T01/T19、涉及论文或政策的 T23 须给 carrier_fact（kind、field、quote）。
+kind 选论文本体、论文报道、政策发布、政策解读或其他分析。引用能识别载体的短句；
+有 DOI 本身不足以证明全文转载。题名体现报道或政策发布/解读时须引题名。请勿输出评分或选择重点新闻。
 
 分类路由：
 {routing}
@@ -209,7 +215,7 @@ def assess_batch(replies, requests, domains, types, request_error):
         if dec.get("status") == "insufficient_evidence":
             errors[i] = "提供的片段证据不足，请复核标题和可用正文"
             continue
-        issue = validate(dec, req, domains, types)
+        issue = validate_decision(dec, req, domains, types)
         if issue:
             errors[i] = issue
         else:
@@ -232,7 +238,7 @@ def resume_decisions(scope, signature, domains, types):
                 continue
             s = current.get(entry.get("record_id"))
             dec = entry.get("decision")
-            if s and isinstance(dec, dict) and not validate(
+            if s and isinstance(dec, dict) and not validate_decision(
                     dec, passage(s["item"], entry.get("expanded") is True), domains, types):
                 done[s["i"]] = dict(dec, i=s["i"], expanded=entry.get("expanded") is True)
     return done
@@ -343,6 +349,9 @@ def main(env_override=None):
         decisions[key] = {k: dec[k] for k in ("domain_path", "domain_no", "type_id", "terms",
                            "alternatives", "reason", "confidence", "event", "event_state",
                            "domain_evidence", "event_evidence")}
+        for field in ("stage_facts", "carrier_fact"):
+            if field in dec:
+                decisions[key][field] = dec[field]
         decisions[key].update(record_id=s["record_id"], contract=CONTRACT_VERSION, expanded=dec["expanded"],
                               ruleLayerRef=f"{s['rule_disp']}/{s['rule_typ']}", isProblemCase=s["problem"])
     result = {"version": CONTRACT_VERSION, "engine_version": ENGINE_VERSION, "signature": signature,
