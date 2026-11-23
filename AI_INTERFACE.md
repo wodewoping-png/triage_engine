@@ -1,4 +1,4 @@
-# AI_INTERFACE —— triage_engine 机器调用契约（v1.12）
+# AI_INTERFACE —— triage_engine 机器调用契约（v1.17）
 
 本文档面向**AI 程序/Agent/服务端调用方**：给出能力边界、端到端流程、输入/输出 JSON Schema、
 字段字典与全部评价机制表（未删减）。人类可读入门见 [README.md](README.md)。
@@ -26,7 +26,7 @@ rows[]（行记录）
 完全同题去重（规范化题名 or url）
   │  ② 分类轨（语义裁决，不计算 D/T 分）
   ▼
-领域判定（D/E 参数域 → 语义叶 GT/AI → 扩展域 → 域外）        ── 每条留 rule/reason/terms/snippet 证据
+领域判定（D/E 参数域 → 语义叶 GT/AI → 扩展域 → v1.17 兜底叶）        ── 每条留 rule/reason/terms/snippet 证据
 类型判定（T01–T25，载体身份与必要条件优先，题名主事件锚定）
   │  [可选] ③ LLM 语义判定合并（run_llm 产出 decisions，覆盖域/类型，规则层留痕）
   ▼
@@ -69,9 +69,7 @@ S10 档位政策（地板/硬上限/上限/论文统一档位）——只改档�
 
 ### 3.2 LLM 决策 schema（`llm_decisions`，可选）
 
-`{"version", "model", "judged", "accepted", "skipped_low_conf", "decisions": {url: {...}}}`；
-每条决策：`{domain_path, domain_no, type_id, terms[], alternatives[], reason, confidence(high|medium|low), ruleLayerRef, isProblemCase}`。
-`domain_path="域外"` 且 `domain_no=""` → 改判域外；`type_id` 须在 T01–T25。合并原则：LLM 覆盖规则层域/类型，规则层结果保留为参考痕迹（`llmJudged=true`）。
+新格式 `version=evidence-v1`。文件记录引擎版本、模型、请求签名和条数。逐条决策以唯一 URL 或 DOI 为键；空键或重复键使用内容标识。每条含记录指纹、领域路径/编号、类型、置信度、理由、事件及其状态、领域和事件的逐字引文（`field`、`quote`）。重建时会核验原文和版本；旧格式的显式导入仍兼容，不能用来续跑新任务。
 
 ## 4. 输出契约
 
@@ -209,12 +207,10 @@ S10（顺序：硬上限 → 地板 → 常规上限 → 论文统一档位；v1
 ### 5.5 LLM 语义判定层（可选第三轨）
 
 - 协议：Anthropic Messages（`POST {LLM_BASE_URL}/v1/messages`），模型默认 glm-5.2，max_tokens 建议 4000，temperature 0。
-- Prompt：两份基准 docx 语义（领域树菜单＋类型菜单＋docx v2 依次分类路由摘要 ROUTING_DIGEST 注入）。
-- **预置叶冻结（v1.09，决策版本 2026-09-24-v3）**：除非与零碳产业/AI与智能科技/通用技术完全无关（判域外），新闻与文献的 `domain_path` 必须逐字取自预置菜单（含"运行扩展域"），无完全匹配时选语义最近的预置叶并在 reason 说明；禁止自拟"扩展:"新路径与新增节点（暂时冻结，用户 2026-09-24 口径）。`type_id` 仍须为 T01–T25。
-- **载体前提（v1.10，决策版本 2026-09-24-v3.1）**：约束 3 增补——`src=literature` 一律 T01；wechat/news 中出现 DOI（字段/链接/正文）只是引用线索，**有 DOI ≠ 论文**：仅当主对象是论文本体（全文转载、学术速递、以论文题名为题、正文即摘要/研究内容）才判 T01；报道/解读/分析/评论某论文（附 DOI）按主事件分型（多为 T23 深度分析），不得因有 DOI 判 T01（与规则层 C-T16 同口径）。
-- 范围：默认全量（`--all`）；采纳策略：confidence=high 或规则层未决（域外/T25/AI00 停根）。
-- 断点续跑：`llm_semantic_audit.jsonl`（每批一条，i 索引去重）；429 退避 30/60/120/240s。
-- 输出合并：见 §3.2；低置信跳过计 `skipped_low_conf`。
+- 调用使用引擎版本、预置领域路径/编号对、现有类型的完整定义及必要条件和跨类型边界。v1.17 全量入域；有内容的新闻归实型，文献源为 T01。证据不足可以请求补读。
+- 初次发送标题前 160 字符、正文前 1100 字符。程序按请求编号逐条检查菜单、来源、状态和引文。丢弃额外编号；仅对缺失、重复或校验失败项单条反馈原因，再发完整标题和已有正文前 12000 字符。仍失败的记录使用规则层结果。`fallback` 记录原因。
+- 合格判定仍按原有 high/规则层未决策略采纳；`--force-all` 仅放宽置信度过滤。决策文件区分 `accepted`、`skipped_low_conf` 和 `fallback_count`。最终 JSON 的 `llmEvidence` 保存已采纳的新格式引文。
+- 续跑用原文记录指纹和请求签名匹配；调换行序不影响命中，正文或模型配置变化会重新送审。原文逐字匹配可核验引文出处，语义结论仍需样本抽查。
 
 ### 5.6 事件级去重（v1.05/v1.06b，管线末端）
 
@@ -255,7 +251,7 @@ S10（顺序：硬上限 → 地板 → 常规上限 → 论文统一档位；v1
 
 完整修订流水线（改哪、怎么验证、怎么同步、怎么发布）见 [MAINTENANCE.md](MAINTENANCE.md)；本节为要点。
 
-- 版本号在 `triage_engine.__version__` / `ENGINE_VERSION`；输出 JSON `method` 串尾部为机制标签（当前 `chain-stage-display-v112`）。
+- 版本号在 `triage_engine.__version__` / `ENGINE_VERSION`；输出 JSON `method` 串尾部为机制标签（当前 `total-domain-v117`）。
 - 升级机制时：更新 `pipeline/` + `rules/` 快照、`ENGINE_VERSION`、README/AI_INTERFACE 版本表，
   并同步 `docs/` 下的机制表快照（02 评分框架表用开发仓 patch_workbooks 系列脚本增补后拷贝）
   与 `docs/requirements_ledger.txt`（与开发仓 `问题.txt` 同步）。

@@ -21,6 +21,7 @@ RULES = os.path.normpath(os.path.join(HERE, "..", "classification-scoring-rules-
 sys.path.insert(0, HERE)
 sys.path.insert(0, RULES)
 
+from semantic_contract import CONTRACT_VERSION, ENGINE_VERSION, domain_menu, passage, record_id, validate as validate_decision
 import build_github_triage as base
 from cls_data import TYPES, DOMAIN_CLS, PRE_CLASSIFICATION_GATES, TYPE_DECISION_RULES
 from expand_domains_data import EXPAND_DOMAINS, DOMAIN_DECISION_RULES, DOMAIN_PRIORITY_RULES
@@ -1384,10 +1385,35 @@ def _load_llm_decisions():
         print(f"[warn] llm_semantic_decisions.json 解析失败，忽略：{e}")
         return {}
     if isinstance(data, dict) and isinstance(data.get("decisions"), (list, dict)):
+        if data.get("version") == CONTRACT_VERSION:
+            if data.get("engine_version") != ENGINE_VERSION:
+                print("[warn] 模型判定的引擎版本不匹配，使用规则层")
+                return {}
+            entries = data["decisions"]
+            if not isinstance(entries, dict):
+                return {}
+            return {key: dec for key, dec in entries.items()
+                    if isinstance(dec, dict) and dec.get("contract") == CONTRACT_VERSION}
         data = data["decisions"]
     if isinstance(data, list):
         data = {d.get("url"): d for d in data if isinstance(d, dict) and d.get("url")}
     return {k: v for k, v in data.items() if isinstance(v, dict)}
+
+
+def _decision_for_item(decisions, item, domains):
+    if not decisions:
+        return None
+    key = item.get("url") or item.get("doi") or ""
+    identity = record_id(item)
+    dec = decisions.get(identity) or decisions.get(key)
+    if not dec:
+        return None
+    if "contract" not in dec:
+        return dec  # Historical user-supplied decision files.
+    if (dec["contract"] != CONTRACT_VERSION or dec.get("record_id") != identity
+            or validate_decision(dec, passage(item, dec.get("expanded") is True), domains, TYPE_BY_ID)):
+        return None
+    return dec
 
 
 _LLM_CONF_MAP = {"high": "明确", "medium": "可判", "low": "低信"}
@@ -2219,11 +2245,12 @@ def build():
 
     out = []
     llm_decisions = _load_llm_decisions()
+    domains = domain_menu(base.DOMS, EXTENSION_DOMAINS, base.LIT_LEAVES) if llm_decisions else {}
     for item in dedup:
         dom = classify_domain_semantic(item)
         typ = classify_type_semantic(item)
         # v1.02：大模型语义判定（两份基准 docx）覆盖规则层结果；规则层留作参考痕迹。
-        llm_dec = llm_decisions.get(item.get("url") or "")
+        llm_dec = _decision_for_item(llm_decisions, item, domains)
         if llm_dec:
             _nd = _llm_override_dom(llm_dec, dom)
             _nt = _llm_override_typ(llm_dec, typ)
@@ -2346,6 +2373,9 @@ def build():
             "displayCategory": _dc[0], "displaySubcategory": _dc[1], "displayClass": _dc[2],
             "displayStage": stage,
             "llmJudged": bool(llm_dec),
+            **({"llmEvidence": {k: llm_dec[k] for k in ("event", "event_state", "domain_evidence",
+                                                       "event_evidence", "contract")}}
+               if llm_dec and llm_dec.get("contract") == CONTRACT_VERSION else {}),
             "value": score["value"], "valueDisplay": score["valueDisplay"], "attention": attention,
             "scoreBand": score["band"], "scoreStatus": score["scoreStatus"],
             "scoreRaw": score["raw"], "scoreAfterGate": score["gated"], "dimensions": score["dimensions"],

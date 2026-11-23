@@ -1,4 +1,4 @@
-# triage_engine —— 能源/零碳/AI 情报三库分类评分引擎（v1.12）
+# triage_engine —— 能源/零碳/AI 情报三库分类评分引擎（v1.17）
 
 把"三库原始数据 → 领域/类型分类 → 新闻价值评分 → 档位政策 → 事件级去重 → 直评口径 → 看板四件套"
 的完整机制封装为**一个可调用的函数包**：传入行记录列表，返回结构化结果并落盘四件套。
@@ -10,15 +10,14 @@
 
 ## 版本
 
-**v1.12**（2026-10-21）＝ v1.04 分类规则 ＋ v1.05 事件级去重 ＋ v1.06(b) 论文统一档位 ＋ v1.08 未来态/汇总稿/媒体解读守卫 ＋ v1.09 展示链路与 LLM 预置叶冻结 ＋ v1.10 载体前提（C-T16：DOI×语义共决，有 DOI ≠ 论文） ＋ v1.11 直评口径（不设 参考/待定/忽略 类目） ＋ v1.12 **链位展示**（新闻按链路层级 性能突破→应用验证→工程示范→产品发布→企业动态→产业链 展示，非主链类型全部折进六链路；纯展示不进评分，具体评分仍按 T 小类）。
-method 串：`…+direct-banding-v111+chain-stage-display-v112`（写入每个输出 JSON 的 `method` 字段，可据此判别版本）。
+当前引擎 v1.17 全量入域，沿用 v1.16 的新闻类型兜底。当前模型契约为 `evidence-v1`，模型请求和断点记录绑定该契约及引擎版本。输出 JSON 的 `method` 以 `total-domain-v117` 结尾。
 
 ## 安装
 
 无需 pip 安装——把 `triage_engine/` 目录整体复制进项目，或本仓库根目录直接使用：
 
 ```bash
-python -m triage_engine.cli version   # 验证：triage_engine v1.12 method=…chain-stage-display-v112
+python -m triage_engine.cli version   # 验证：triage_engine v1.17 method=…total-domain-v117
 ```
 
 依赖：仅标准库（`requirements.txt` 为说明性文件）。LLM 层同样用标准库 `urllib`。

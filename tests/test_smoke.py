@@ -157,7 +157,7 @@ def _find(result, title_prefix):
 
 
 def test_engine_smoke():
-    assert ENGINE_VERSION == "1.12"
+    assert ENGINE_VERSION == "1.17"
     with tempfile.TemporaryDirectory() as out_dir:
         result = run(_rows(), out_dir)
 
@@ -166,7 +166,7 @@ def test_engine_smoke():
                    "域外内容分析_20260615-23.csv",
                    "三库严格语义分类看板_20260615-23.html"):
             assert os.path.getsize(os.path.join(out_dir, fn)) > 100, fn
-        assert result["method"].endswith("chain-stage-display-v112")
+        assert result["method"].endswith("total-domain-v117")
         assert result["stats"]["records"] == len(result["items"]) == 12  # 12 行全部留主输出
 
         # v1.11：不设 参考/待定/忽略 类目——attention 只剩 高/中/低/域外；审计位归零
@@ -239,20 +239,20 @@ def test_engine_smoke():
         assert reprint["attention"] == "中"
         assert reprint["displayCategory"] == "论文" and reprint["displaySubcategory"] == "研究型"
 
-        # 域外不评分；范围忽略（CATL）仅审计字段，不再构成 忽略 类目
+        # v1.17 无领域信号也进入工艺和工程兜底叶。
         out_rec = _find(result, "某明星官宣新剧")
         catl = _find(result, "宁德时代发布")
         for x in (out_rec, catl):
-            assert x["domainDisp"] == "域外" and x["attention"] == "域外"
-            assert x["scoreBand"] == "未评分" and x["value"] is None
+            assert x["domain"] == "GT125 工艺和工程" and x["attention"] == "低"
+            assert x["scoreBand"] == "低"
         assert catl["ignored"] is True  # 审计留痕：范围忽略不再拦截评分/输出
 
         # v1.09 展示链路（纯展示标注，不影响评分）：论文/新闻两级 + 归入大类 A/B/C/D
         assert paper["displayCategory"] == "论文" and paper["displaySubcategory"] == "研究型" \
             and paper["displayClass"] == "A"
-        assert fut["displayCategory"] == "新闻" and fut["displaySubcategory"] == "工程与产业化" \
+        assert fut["displayCategory"] == "新闻" and fut["displaySubcategory"] == "工程示范" \
             and fut["displayClass"] == "B(链2-5)"
-        assert out_rec["displayCategory"] == "—"  # 域外 → 展示标域外
+        assert out_rec["displayCategory"] == "会议"
         assert sum(result["stats"]["displayChain"].values()) == result["stats"]["records"]
 
         # v1.12 链位展示：六链路折进映射（纯展示）——类型级确定性映射，评分链路零变动
@@ -263,21 +263,21 @@ def test_engine_smoke():
         assert coop["displayStage"] == "链5 企业动态"    # T12 合作 → 链5（用户指定折入）
         assert pi["displayStage"] == "链1 性能突破"      # T23 深度分析 → 链1
         assert reprint["displayStage"] == "链1 性能突破"  # 全文转载 T01 → 链1
-        for x in (out_rec, catl):
-            assert x["displayStage"] == "—"              # 域外 → 链位 “—”
+        assert out_rec["displayStage"] == "链1 性能突破"
+        assert catl["displayStage"] == "链4 产品发布"
         ds = stats["displayStage"]
         assert set(ds) == {"链1 性能突破", "链2 应用验证", "链3 工程示范",
                            "链4 产品发布", "链5 企业动态", "链6 产业链", "待定", "—"}
         assert sum(ds.values()) == stats["records"]      # 链位计数闭合
-        assert ds["链1 性能突破"] == 6 and ds["链4 产品发布"] == 1 \
-            and ds["链3 工程示范"] == 1 and ds["链5 企业动态"] == 2 and ds["—"] == 2
+        assert ds["链1 性能突破"] == 7 and ds["链4 产品发布"] == 2 \
+            and ds["链3 工程示范"] == 1 and ds["链5 企业动态"] == 2 and ds["—"] == 0
 
         # 档位分布闭合：高 1（T02 报告）/ 中 4（T09·T01×2·C-T16 假文献 S-P10）/ 低 5 / 域外 2
-        assert (stats["high"], stats["medium"], stats["low"], stats["outOfScope"]) == (1, 4, 5, 2)
+        assert (stats["high"], stats["medium"], stats["low"], stats["outOfScope"]) == (1, 4, 7, 0)
 
     print("triage_engine smoke OK：v1.07+v1.08+v1.09+v1.10+v1.11+v1.12 机制（T09 题名锚定 / "
           "S-A05 未来态 / S-A04 汇总稿 / B1 媒体解读改判 / C-T16 载体前提（假文献→T23·全文转载→T01） / "
-          "直评口径（12 条全留主输出：T02 S-R01 高 / T23 直接低 / 域外不评分·ignored 仅审计） / "
+          "直评口径（12 条全留主输出：T02 S-R01 高 / T23 直接低 / 全量入域·ignored 仅审计） / "
           "T01 中档 / 展示链路 / 六链路折进展示）全部落位")
 
 
