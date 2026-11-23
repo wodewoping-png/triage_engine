@@ -10,11 +10,10 @@
 """
 from __future__ import annotations
 
-import json
 import os
 import sys
 
-from .engine import load_base, _ensure_paths
+from .engine import load_base, _check_rows, _ensure_paths
 
 _ensure_paths()
 import run_llm_semantic_triage as _runner  # noqa: E402
@@ -30,13 +29,12 @@ def run_llm(rows, out_dir, batch=16, sleep=6.0, all_items=True, force_all=False,
       batch/sleep: 批大小与批间节流秒数（防 429；曾用 --batch 16 --sleep 6 稳定跑通全量）。
       all_items: True=全量判定；False=仅规则层域外/T25/问题记录。
       force_all: decisions 不过滤 confidence（默认只采纳 high 或规则层未决）。
-      env: 可选 dict，合并进 os.environ（优先于 .env 中同名项之外的查找）。
+      env: 本次调用配置，优先于进程环境和 .env。
     返回：llm_semantic_decisions.json 的完整 dict（version/model/judged/accepted/decisions…）。
     """
+    _check_rows(rows)
     base = load_base()
     base.read_rows = lambda: list(rows)
-    if env:
-        os.environ.update({k: str(v) for k, v in env.items()})
     _runner.AUDIT_PATH = os.path.join(out_dir, "llm_semantic_audit.jsonl")
     _runner.DECISIONS_PATH = os.path.join(out_dir, "llm_semantic_decisions.json")
     os.makedirs(out_dir, exist_ok=True)
@@ -53,9 +51,6 @@ def run_llm(rows, out_dir, batch=16, sleep=6.0, all_items=True, force_all=False,
         sys.argv.append("--dry-run")
     sys.argv += ["--batch", str(batch), "--sleep", str(sleep)]
     try:
-        _runner.main()
+        return _runner.main(env_override=env) or {}
     finally:
         sys.argv = argv_backup
-
-    with open(_runner.DECISIONS_PATH, encoding="utf-8") as f:
-        return json.load(f)

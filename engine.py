@@ -16,11 +16,12 @@ import json
 import os
 import sys
 
+from .pipeline.semantic_contract import ENGINE_VERSION
+
 PKG_ROOT = os.path.dirname(os.path.abspath(__file__))
 PIPELINE_DIR = os.path.join(PKG_ROOT, "pipeline")
 RULES_DIR = os.path.join(PKG_ROOT, "rules")
 
-ENGINE_VERSION = "1.17"
 METHOD_TAG = ("semantic-llm-calibrated-v5+three-band-scoring-v1.04+priority-tiers"
               "+s10-band-policy-v104+llm-merge+event-dedup-v105+paper-band-v106b+ref-zone-v107"
               "+future-roundup-retype-v108+display-chain-v109+doi-carrier-premise-v110"
@@ -82,7 +83,8 @@ def _check_rows(rows):
         if r.get("src") not in ("news-spider", "wechat", "literature"):
             raise ValueError(f"rows[{i}].src 必须是 news-spider/wechat/literature 之一，"
                              f"当前 {r.get('src')!r}")
-        r.setdefault("body", "")
+        for optional in ("body", "meta", "url"):
+            r.setdefault(optional, "")
 
 
 def _make_validator(out_dir):
